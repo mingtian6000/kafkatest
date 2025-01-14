@@ -1,0 +1,42 @@
+<configuration>
+    <property name="log.pattern" value="%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%method,%line] - %msg%n" />
+    <!-- kafka 配置 -->
+    <springProperty scope="context" name="kafka.servers" source="spring.kafka.appender.bootstrap.servers"/>-->
+    <springProperty scope="context" name="kafka.topic" source="spring.kafka.appender.topic"/>
+    <property name="kafka.servers" value="localhost:9092"/>
+    <property name="kafka.topic" value="test-topic"/>
+    <!-- 控制台输出 -->
+    <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%black %red(%d{yyyy-MM-dd HH:mm:ss}) %green([%thread]) %highlight(%-5level) %boldMagenta(%logger) - %cyan(%msg%n)</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="KAFKA" class="com.github.danielwegener.logback.kafka.KafkaAppender">
+
+            <encoder>
+                <pattern>
+                    {
+                    "service":"${kafka.servers}",
+                    "date":"%d{yyyy-MM-dd HH:mm:ss}",
+                    "level":"%level",
+                    "thread": "%thread",
+                    "logger": "%logger{36}",
+                    "msg":"%msg"
+                    }
+                </pattern>
+            </encoder>
+        <topic>test-topic</topic>
+        <keyingStrategy class="com.github.danielwegener.logback.kafka.keying.NoKeyKeyingStrategy" />
+        <deliveryStrategy class="com.github.danielwegener.logback.kafka.delivery.AsynchronousDeliveryStrategy" />
+        <producerConfig>bootstrap.servers=${kafka.servers}</producerConfig>
+    </appender>
+    <!-- 异步传递策略，建议选择异步，不然连接kafka失败，会阻挡服务启动 -->
+    <appender name="Async" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="KAFKA" />
+    </appender>
+
+    <root level="info">
+        <appender-ref ref="KAFKA" />
+    </root>
+</configuration>

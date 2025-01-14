@@ -1,0 +1,15 @@
+
+<configuration>
+    <appender name="CUSTOM_KAFKA" class="alice.demo.KafkaAppender">
+        <topic>test-topic</topic>
+        <bootstrapServers>localhost:9092</bootstrapServers>
+    </appender>
+
+    <appender name="KAFKA" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="CUSTOM_KAFKA"/>
+    </appender>
+
+    <root level="info">
+        <appender-ref ref="KAFKA" />
+    </root>
+</configuration>
