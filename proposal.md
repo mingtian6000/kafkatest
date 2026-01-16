@@ -1,3 +1,4 @@
+'''pyhon
 from fastmcp import FastMCP
 from atlassian import Confluence
 import os
@@ -58,3 +59,4 @@ def update_confluence_page(page_id: str, title: str, body_content: str):
 
 if __name__ == "__main__":
     mcp.run()
+'''
