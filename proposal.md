@@ -1,75 +1,60 @@
-<table>
-<thead>
-<tr>
-<th><strong>Component / Area</strong></th>
-<th><strong>Memo Notes</strong></th>
-<th><strong>Scope / Comment / Owner</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>1. Data Flow Configuration</strong></td>
-<td>
-<ul>
-<li><strong>Input & Output:</strong> Pub/Sub topic – do we need to create a new one, or can an existing topic be used?</li>
-<li>Is the output bucket already defined, or is a new one required?</li>
-</ul>
-</td>
-<td><strong>Decision Needed:</strong> Confirm with source/downstream teams on reusability.<br><strong>Owner:</strong> Data/Platform Engineer</td>
-</tr>
-<tr>
-<td><strong>2. Dataflow Jobs</strong></td>
-<td>
-<ul>
-<li>Are the Dataflow jobs already existing? Are they the FDR-related ones?</li>
-</ul>
-</td>
-<td><strong>To Clarify:</strong> Identify existing jobs to avoid duplication.<br><strong>Owner:</strong> Data Engineer</td>
-</tr>
-<tr>
-<td><strong>3. Permissions & IAM</strong></td>
-<td>
-<ul>
-<li>Create a DTP service account and grant all necessary permissions (no existing account).</li>
-</ul>
-</td>
-<td><strong>To Do (Required):</strong> Must follow the principle of least privilege.<br><strong>Owner:</strong> Security/Infra Engineer</td>
-</tr>
-<tr>
-<td><strong>4. Compute Infrastructure (DTP VM - MIG)</strong></td>
-<td>
-<ul>
-<li><strong>Build Files:</strong> Which config/Ansible files to use? Base image RHEL 8?</li>
-<li><strong>Write Terraform:</strong> Code for health check, scheduler policy, image/CMEK, DNS records, etc. Put initial variable files in the config bucket.</li>
-</ul>
-</td>
-<td><strong>Core Dev Work:</strong> All items required.<br><strong>Decision:</strong> Finalize base image & config management tool.<br><strong>Owner:</strong> Infrastructure Engineer</td>
-</tr>
-<tr>
-<td><strong>5. Configuration, Testing & Validation</strong></td>
-<td>
-<ul>
-<li>Configuration in Pulse UI.</li>
-<li><strong>Testing:</strong>
-<ol>
-<li>Instance should start up and run.</li>
-<li>Test data preparation – is business team involvement needed?</li>
-<li>How to perform End-to-End (E2E) testing?</li>
-</ol>
-</li>
-</ul>
-</td>
-<td><strong>To Do:</strong> Post-deployment steps.<br><strong>Decision:</strong> Define E2E test plan and data prep responsibility.<br><strong>Owner:</strong> QA Engineer (with Business Team collaboration)</td>
-</tr>
-<tr>
-<td><strong>6. Security & Compliance</strong></strong></td>
-<td>
-<ul>
-<li>Is there any certificate management related to DTP?</li>
-<li>Anything else to consider?</li>
-</ul>
-</td>
-<td><strong>To Clarify:</strong> Engage security/compliance team for review.<br><strong>Owner:</strong> Security Engineer</td>
-</tr>
-</tbody>
-</table>
+from fastmcp import FastMCP
+from atlassian import Confluence
+import os
+
+# 初始化 MCP
+mcp = FastMCP("Confluence-Manager")
+
+# Confluence 配置 (建议通过环境变量传入)
+CONFLUENCE_URL = os.getenv("CONFLUENCE_URL")
+CONFLUENCE_USERNAME = os.getenv("CONFLUENCE_USERNAME")
+CONFLUENCE_TOKEN = os.getenv("CONFLUENCE_TOKEN") # 在 Atlassian 账户设置中生成
+
+conf = Confluence(
+    url=CONFLUENCE_URL,
+    username=CONFLUENCE_USERNAME,
+    password=CONFLUENCE_TOKEN,
+    cloud=True
+)
+
+@mcp.tool()
+def create_confluence_page(space: str, title: str, body_content: str, parent_id: str = None):
+    """
+    在指定 Space 创建一个层次清晰的 Confluence 页面。
+    :param space: 空间关键字 (如 'PROJ')
+    :param title: 页面标题
+    :param body_content: HTML 格式的页面内容
+    :param parent_id: 父级页面 ID (可选)
+    """
+    try:
+        response = conf.create_page(
+            space=space,
+            title=title,
+            body=body_content,
+            parent_id=parent_id,
+            type='page',
+            representation='storage' # 使用 Confluence 存储格式 (XHTML)
+        )
+        return f"页面创建成功！ID: {response['id']}, 链接: {response['_links']['base']}{response['_links']['webui']}"
+    except Exception as e:
+        return f"创建失败: {str(e)}"
+
+@mcp.tool()
+def update_confluence_page(page_id: str, title: str, body_content: str):
+    """
+    更新现有的 Confluence 页面内容。
+    """
+    try:
+        conf.update_page(
+            page_id=page_id,
+            title=title,
+            body=body_content,
+            type='page',
+            representation='storage'
+        )
+        return f"页面 {page_id} 更新成功！"
+    except Exception as e:
+        return f"更新失败: {str(e)}"
+
+if __name__ == "__main__":
+    mcp.run()
