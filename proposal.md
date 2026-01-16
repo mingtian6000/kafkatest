@@ -1,44 +1,75 @@
-Excellent. Incorporating those critical points about quality gates and safe development practices makes the plan even more robust. Here is the polished English version of the Implementation Plan section, integrating all your details.
-
-6. Implementation Plan: A Phased, Low-Risk Migration
-
-To ensure a smooth, zero-downtime transition with minimal risk to production, we propose a meticulous three-phase rollout governed by rigorous validation and safe development practices. This approach prioritizes safety, allows for iterative learning, and systematically de-risks each step before proceeding.
-
-Phase 1: Foundation & Proof-of-Concept (Pilot on a Single Market QA)
-
-* Objective: To validate the entire Terraform workflow and establish a golden template in a single, non-critical environment.
-* Steps:
-   1. Pilot Selection: Begin with the QA environment for the India market. This environment is representative of our stack but carries lower business risk.
-   2. Isolated Development & Testing: We will create a dedicated, long-lived feature branch (e.g., 
-"terraform-migration") to host all refactoring work. This completely isolates our changes from the active 
-"main" branch, ensuring no disruption to existing pipelines and deployments.
-   3. Comprehensive Refactoring: Refactor the configurations for all 16 components serving India QA into a complete, integrated Terraform project within this branch.
-   4. End-to-End Validation: Execute a full 
-"terraform apply" for the India QA environment from our branch. We will perform exhaustive validation, including:
-      * Automated Cross-Validation Checks: Scripts will compare key outputs (IPs, endpoints, security group rules) from the new Terraform-provisioned environment against the legacy one to ensure parity.
-      * Manual Infrastructure Review: Engineers will perform hands-on verification of resource health and configuration.
-      * Functional & Integration Testing: Full test suites will be run against the new environment.
-
-Phase 2: Horizontal Expansion to All Non-Production Environments
-
-* Objective: To scale the validated pattern safely to all development and staging environments.
-* Steps:
-   1. QA Expansion: Using the proven template from Phase 1, we will replicate the deployment for all other market QA environments (e.g., UK, Hong Kong) by primarily updating the 
-"terraform.tfvars" variable files. All deployments will be executed from our isolated feature branch.
-   2. Pre-Production Promotion: The same process will be repeated for all Pre-Production (Staging) environments. This phase serves as the final dress rehearsal for our production cutover and will include load and resilience testing.
-   3. Governance & Gates: Each environment deployment will be preceded by a formal Change Advisory Board (CAB) review and require a manual approval of the 
-"terraform plan" output by a senior engineer before application.
-
-Phase 3: Controlled Production Cutover & Branch Consolidation
-
-* Objective: To execute the final production migration with maximum control and then merge our changes to the main codebase.
-* Steps:
-   1. Phased Production Rollout: We will migrate production environments market-by-market (starting with India). We will employ a blue-green or canary strategy, thoroughly validating the new infrastructure before switching live traffic.
-   2. Final Validation & Merge: Upon successful migration of the first production market, we will initiate the process to merge our long-lived 
-"terraform-migration" branch back into the 
-"main" branch. This will be a carefully coordinated action, likely timed with a standard release window.
-   3. Decommissioning: Once all markets are live on the new Terraform pipeline and stability is confirmed, we will formally sunset the old Terragrunt-based deployment process and supporting scripts.
-
-Success Metrics & Governance:
-
-Progress will be measured by: deployment success rate (target 100%), reduction in deployment lead time (target >50%), and zero Sev-1/2 incidents caused by the migration. A formal retrospective will be held at the end of each phase. Advancement to the next phase is contingent on meeting all predefined success criteria for the current phase.
+<table>
+<thead>
+<tr>
+<th><strong>Component / Area</strong></th>
+<th><strong>Memo Notes</strong></th>
+<th><strong>Scope / Comment / Owner</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1. Data Flow Configuration</strong></td>
+<td>
+<ul>
+<li><strong>Input & Output:</strong> Pub/Sub topic – do we need to create a new one, or can an existing topic be used?</li>
+<li>Is the output bucket already defined, or is a new one required?</li>
+</ul>
+</td>
+<td><strong>Decision Needed:</strong> Confirm with source/downstream teams on reusability.<br><strong>Owner:</strong> Data/Platform Engineer</td>
+</tr>
+<tr>
+<td><strong>2. Dataflow Jobs</strong></td>
+<td>
+<ul>
+<li>Are the Dataflow jobs already existing? Are they the FDR-related ones?</li>
+</ul>
+</td>
+<td><strong>To Clarify:</strong> Identify existing jobs to avoid duplication.<br><strong>Owner:</strong> Data Engineer</td>
+</tr>
+<tr>
+<td><strong>3. Permissions & IAM</strong></td>
+<td>
+<ul>
+<li>Create a DTP service account and grant all necessary permissions (no existing account).</li>
+</ul>
+</td>
+<td><strong>To Do (Required):</strong> Must follow the principle of least privilege.<br><strong>Owner:</strong> Security/Infra Engineer</td>
+</tr>
+<tr>
+<td><strong>4. Compute Infrastructure (DTP VM - MIG)</strong></td>
+<td>
+<ul>
+<li><strong>Build Files:</strong> Which config/Ansible files to use? Base image RHEL 8?</li>
+<li><strong>Write Terraform:</strong> Code for health check, scheduler policy, image/CMEK, DNS records, etc. Put initial variable files in the config bucket.</li>
+</ul>
+</td>
+<td><strong>Core Dev Work:</strong> All items required.<br><strong>Decision:</strong> Finalize base image & config management tool.<br><strong>Owner:</strong> Infrastructure Engineer</td>
+</tr>
+<tr>
+<td><strong>5. Configuration, Testing & Validation</strong></td>
+<td>
+<ul>
+<li>Configuration in Pulse UI.</li>
+<li><strong>Testing:</strong>
+<ol>
+<li>Instance should start up and run.</li>
+<li>Test data preparation – is business team involvement needed?</li>
+<li>How to perform End-to-End (E2E) testing?</li>
+</ol>
+</li>
+</ul>
+</td>
+<td><strong>To Do:</strong> Post-deployment steps.<br><strong>Decision:</strong> Define E2E test plan and data prep responsibility.<br><strong>Owner:</strong> QA Engineer (with Business Team collaboration)</td>
+</tr>
+<tr>
+<td><strong>6. Security & Compliance</strong></strong></td>
+<td>
+<ul>
+<li>Is there any certificate management related to DTP?</li>
+<li>Anything else to consider?</li>
+</ul>
+</td>
+<td><strong>To Clarify:</strong> Engage security/compliance team for review.<br><strong>Owner:</strong> Security Engineer</td>
+</tr>
+</tbody>
+</table>
