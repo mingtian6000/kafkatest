@@ -2,6 +2,7 @@
 它的逻辑类似于“乐高积木”：你只需要调用不同的方法（如 add_code 或 add_info），最后它会统一生成 Confluence 能够识别的 Storage Format。
 1. 核心代码实现：ConfluenceContentBuilder
 你可以将这段代码集成到你的 MCP 项目中。
+```python
 class ConfluenceContentBuilder:
     def __init__(self):
         self.elements = []
