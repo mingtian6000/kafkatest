@@ -1,54 +1,112 @@
-```python
-import os
-from fastmcp import FastMCP
-from kubernetes import client, config
+这是一个很好的技术架构问题！我来详细对比一下这两种方案：
 
-# 初始化 MCP
-mcp = FastMCP("GKE-Manager")
+方案对比分析
 
-def get_k8s_api_client(proxy_url=None):
-    """
-    手动配置带代理的 K8s 客户端
-    """
-    # 1. 加载本地 kubeconfig (通常由 gcloud container clusters get-credentials 生成)
-    config.load_kube_config()
-    
-    # 2. 获取当前上下文的配置
-    k8s_config = client.Configuration.get_default_copy()
-    
-    # 3. 核心：注入代理
-    # 如果你在命令行需要配代理，这里就填那个代理地址
-    if proxy_url:
-        k8s_config.proxy = proxy_url
-        # 如果是私有集群自签证书，有时需要跳过校验（生产环境慎用）
-        # k8s_config.verify_ssl = False 
-    
-    return client.CoreV1Api(client.ApiClient(k8s_config))
+方案一：MCP（Model Context Protocol）直接连接
 
-@mcp.tool()
-def list_gke_pods(namespace: str = "default", proxy: str = None):
-    """
-    列出 GKE 集群中的 Pod。
-    :param namespace: 命名空间
-    :param proxy: 可选，例如 'http://127.0.0.1:8888'。如果不传则尝试从环境变量获取。
-    """
-    # 优先使用传入的 proxy，其次选环境变量，最后 None
-    proxy_to_use = proxy or os.getenv("HTTPS_PROXY") or os.getenv("http_proxy")
-    
-    try:
-        v1 = get_k8s_api_client(proxy_to_use)
-        pods = v1.list_namespaced_pod(namespace)
-        
-        result = []
-        for pod in pods.items:
-            result.append({
-                "name": pod.metadata.name,
-                "status": pod.status.phase,
-                "pod_ip": pod.status.pod_ip
-            })
-        return result
-    except Exception as e:
-        return f"无法连接到集群: {str(e)}"
+优点：
 
-if __name__ == "__main__":
-    mcp.run()
+1. 实时性高：直接API调用，延迟低
+2. 功能完整：可以直接使用MCP提供的丰富功能
+3. 维护简单：无需维护额外的脚本
+4. 安全性：通过标准的OAuth/Service Account认证
+5. 开发快速：已有现成的GCP MCP服务端
+
+缺点：
+
+1. 依赖MCP服务可用性
+2. 权限控制较粗粒度
+3. 需要额外配置MCP服务器
+
+方案二：Skill + gcloud CLI脚本
+
+优点：
+
+1. 灵活性强：完全自定义脚本逻辑
+2. 复用现有脚本：可以利用公司已有的运维脚本
+3. 细粒度控制：精确控制每一步操作
+4. 调试方便：脚本可独立测试运行
+5. 兼容性好：不依赖特定MCP实现
+
+缺点：
+
+1. 性能开销：需要启动子进程执行脚本
+2. 维护成本：需要维护脚本和Skill
+3. 错误处理复杂：需要解析脚本输出
+4. 安全性风险：需要妥善管理凭据
+
+推荐方案
+
+推荐使用 MCP为主，Skill脚本为辅 的混合架构：
+
+架构设计：
+├── 高频/标准化操作 → 通过MCP
+│   ├── 资源列表查询
+│   ├── 监控指标获取
+│   ├── 简单配置变更
+│   └── 日志查看
+│
+└── 低频/复杂操作 → 通过Skill+脚本
+    ├── 批量操作
+    ├── 自定义报表生成
+    ├── 复杂工作流
+    └── 特殊环境操作
+
+具体实现建议
+
+1. 使用MCP的场景（优先）
+
+# 示例：通过MCP获取GCP信息
+# Cloud Code已经内置了很好的MCP支持
+# 可以快速查询资源状态、监控等
+
+2. 使用Skill+脚本的场景
+
+#!/bin/bash
+# custom-gcp-script.sh
+# 复杂的多步骤操作
+gcloud projects list --format="json"
+gcloud compute instances list --format="json"
+# 自定义数据处理逻辑...
+
+# skill_gcp_info.py
+import subprocess
+import json
+
+def get_gcp_resources():
+    """通过脚本获取GCP资源信息"""
+    result = subprocess.run(
+        ['./custom-gcp-script.sh'],
+        capture_output=True,
+        text=True
+    )
+    return json.loads(result.stdout)
+
+技术选型建议
+
+场景 推荐方案 理由
+日常监控查询 MCP 快速、实时
+资源清单管理 MCP 标准化、易维护
+批量操作 Skill+脚本 灵活性高
+自定义报表 Skill+脚本 逻辑复杂
+快速诊断 MCP 即时响应
+运维自动化 混合方案 平衡灵活与效率
+
+安全考虑
+
+1. MCP方案：使用Service Account，权限可审计
+2. 脚本方案：注意凭据存储安全，建议使用Workload Identity
+3. 最小权限原则：两种方案都应遵循
+
+性能考虑
+
+- MCP：适合高频小请求
+- 脚本：适合低频批量操作
+
+最终建议：
+
+1. 先从MCP开始，覆盖80%的常用场景
+2. 为特殊需求开发Skill脚本
+3. 定期评估，将常用的脚本功能逐步迁移到MCP
+
+这样可以平衡开发效率、系统稳定性和运维灵活性。您觉得这个方案如何？
