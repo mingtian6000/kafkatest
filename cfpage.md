@@ -25,4 +25,86 @@ Celery 执行器 (Executor) 工人。它负责实际执行 Airflow 定义的任�
 * 报表系统：生成复杂的业务报表，涉及多表关联和聚合计算。
 * 数据质量监控：定时检查数据的一致性、完整性和准确性。
 
-总结：你在 GCP 上搭建的这套环境，是一个功能非常完整的数据流水线作业平台。它非常适合处理企业级的数据密集型任务，能够确保任务按时、可靠、高效地运行。
+你提到的 Salary 其实是 Celery（发音类似“塞勒瑞”），这是一个非常流行的 Python 分布式任务队列框架。它和 Airflow 是搭档关系，不是部署在 Airflow 上的服务。
+
+1. Celery 是什么？
+
+你可以把它理解成 “干活的小工”。它的核心组件是 Worker（工人），专门负责执行具体的任务代码（比如跑 Python 脚本、处理数据、调用 API）。
+
+2. 它在哪里？
+
+在 Google Cloud 的 VM 架构中，Celery Worker 通常部署在独立的虚拟机上，或者与 Airflow 的 Scheduler/Webserver 部署在同一台机器上（但作为独立进程运行）。
+
+* Airflow VM：负责“指挥”（调度任务）。
+* RabbitMQ VM：负责“传令”（传递任务指令）。
+* Celery Worker VM：负责“干活”（执行任务）。
+
+3. 为什么需要它？
+
+Airflow 本身只负责编排任务流程（DAG），但具体执行任务需要“执行器”。Celery Executor 是 Airflow 最常用的分布式执行器，它允许你将任务分发到多台机器（Worker）上并行执行，从而解决单机性能瓶颈，实现高并发处理。
+
+总结：Celery 是 Airflow 集群中负责实际执行代码的组件，通常以独立进程或独立 VM 的形式存在。
+
+这个问题拆解成两块：Airflow 怎么连 RabbitMQ 和 RabbitMQ 集群怎么配。
+
+1. Airflow 连接 RabbitMQ 配置
+
+Airflow 通过 
+"CeleryExecutor" 与 RabbitMQ 通信。你只需要在 Airflow 的配置文件（
+"airflow.cfg" 或环境变量）中修改以下两个核心参数：
+
+* 执行器类型：
+"executor = CeleryExecutor"
+* 消息队列地址：
+"broker_url = amqp://用户名:密码@RabbitMQ主机IP:5672/"
+
+关键点：
+
+* 协议：必须使用 
+"amqp://" 协议。
+* 端口：默认是 
+"5672"（管理界面端口是 
+"15672"，别搞混）。
+* 权限：确保 RabbitMQ 里创建了对应的用户和 vhost，并授予读写权限。
+
+2. RabbitMQ 集群配置（3节点）
+
+在 GCP VM 上搭建 3 节点集群，核心是共享 Erlang Cookie 和节点发现。
+
+第一步：共享 Cookie（集群通信凭证）
+
+RabbitMQ 节点间通过 Erlang Cookie 认证。你必须让 3 台 VM 的 Cookie 文件内容完全一致。
+
+* 文件路径：
+"/var/lib/rabbitmq/.erlang.cookie"
+* 操作：将其中一台 VM 的 Cookie 内容复制到另外两台，然后重启 RabbitMQ 服务。
+
+第二步：节点发现（加入集群）
+
+假设 3 台 VM 的主机名分别是 
+"rabbit1"、
+"rabbit2"、
+"rabbit3"。
+
+1. 启动第一个节点：在 
+"rabbit1" 上正常启动服务。
+2. 加入集群：在 
+"rabbit2" 和 
+"rabbit3" 上分别执行：
+# 停止应用
+rabbitmqctl stop_app
+# 加入 rabbit1 的集群
+rabbitmqctl join_cluster rabbit@rabbit1
+# 启动应用
+rabbitmqctl start_app
+3. 验证：执行 
+"rabbitmqctl cluster_status"，看到 3 个节点都是 
+"running" 就成功了。
+
+第三步：高可用策略（Mirrored Queue）
+
+集群建好后，默认队列数据只存在一个节点上。为了容灾，你需要设置镜像队列，让消息在 3 个节点间同步：
+
+rabbitmqctl set_policy ha-all "^" '{"ha-mode":"all"}'
+
+这条命令会让所有队列在所有节点上创建副本，这样即使某个 VM 宕机，任务也不会丢失。
