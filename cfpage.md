@@ -1,93 +1,28 @@
-太棒了！直接手动拼接 XML 字符串确实非常痛苦。为了让你的 FastMCP 工具更易维护，我们可以设计一个简单的 ConfluenceBuffer 类。
-它的逻辑类似于“乐高积木”：你只需要调用不同的方法（如 add_code 或 add_info），最后它会统一生成 Confluence 能够识别的 Storage Format。
-1. 核心代码实现：ConfluenceContentBuilder
-你可以将这段代码集成到你的 MCP 项目中。
-```python
-class ConfluenceContentBuilder:
-    def __init__(self):
-        self.elements = []
+你提到的这套架构（Airflow + RabbitMQ + Celery）在 Google Cloud 的 VM 上，是数据工程领域最经典的“任务调度 + 消息队列 + 分布式执行”组合。它主要用来解决大规模、复杂、长时间运行的数据处理任务的编排与执行问题。
 
-    def add_text(self, text):
-        """添加普通文本"""
-        self.elements.append(f"<p>{text}</p>")
-        return self
+简单来说，这套架构的核心逻辑是：Airflow 负责“指挥”（编排任务），RabbitMQ 负责“传令”（传递指令），Celery 负责“干活”（执行任务）。
 
-    def add_code(self, code_content, language="python", title=None):
-        """添加代码块宏"""
-        macro = f'''
-        <ac:structured-macro ac:name="code">
-            <ac:parameter ac:name="language">{language}</ac:parameter>
-            {f'<ac:parameter ac:name="title">{title}</ac:parameter>' if title else ''}
-            <ac:plain-text-body><![CDATA[{code_content}]]></ac:plain-text-body>
-        </ac:structured-macro>
-        '''
-        self.elements.append(macro)
-        return self
+1. 各组件扮演的角色
 
-    def add_info_panel(self, content, title="Note", type="info"):
-        """添加信息面板 (info, tip, note, warning)"""
-        macro = f'''
-        <ac:structured-macro ac:name="{type}">
-            <ac:parameter ac:name="title">{title}</ac:parameter>
-            <ac:rich-text-body><p>{content}</p></ac:rich-text-body>
-        </ac:structured-macro>
-        '''
-        self.elements.append(macro)
-        return self
+组件 角色 比喻
+Airflow 调度器 (Orchestrator) 导演。它不干活，只负责定义任务流程（DAG），决定什么时候该运行哪个任务，以及任务之间的依赖关系（谁先谁后）。
+RabbitMQ 消息队列 (Message Broker) 传令兵。Airflow 把“要执行任务”的指令（消息）发给 RabbitMQ，Celery 从 RabbitMQ 这里领取任务。它解耦了调度器和执行器，避免它们直接通信。
+Celery 执行器 (Executor) 工人。它负责实际执行 Airflow 定义的任务（比如跑 Python 脚本、执行 SQL、调用 API）。它通常部署在多个 VM 上，形成“工人集群”。
 
-    def add_image(self, filename):
-        """引用已上传的附件图片"""
-        img_tag = f'''
-        <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{filename}" />
-        </ac:image>
-        '''
-        self.elements.append(img_tag)
-        return self
+2. 这套架构解决的具体问题
 
-    def build(self):
-        """生成最终的 Storage Format 字符串"""
-        return "".join(self.elements)
+在数据工程中，单台机器往往无法处理海量数据或复杂的计算逻辑。这套架构通过分布式和异步的方式解决了以下痛点：
 
-2. 在 FastMCP 中如何调用
-假设你正在编写一个名为 create_rich_page 的工具：
-@mcp.tool()
-async def create_rich_page(title: str, space_key: str):
-    builder = ConfluenceContentBuilder()
-    
-    # 构建丰富内容
-    builder.add_text("这是通过 FastMCP 自动生成的架构文档。")
-    builder.add_info_panel("请注意：生产环境操作需谨慎！", type="warning")
-    builder.add_code("print('Hello MCP')", title="示例代码")
-    builder.add_image("architecture.png") # 假设附件已存在
-    
-    storage_html = builder.build()
-    
-    # 构造 API 请求体
-    payload = {
-        "type": "page",
-        "title": title,
-        "space": {"key": space_key},
-        "body": {
-            "storage": {
-                "value": storage_html,
-                "representation": "storage"  # 关键点：声明使用存储格式
-            }
-        }
-    }
-    
-    # 使用你的 httpx 或 requests 客户端发送 payload
-    # ... 发送请求的代码 ...
-    return f"页面 '{title}' 已创建成功。"
+* 解决单点瓶颈：如果只用 Airflow 的默认执行器，所有任务都在调度器所在的机器上运行。一旦任务量大或任务复杂，调度器会卡死。引入 Celery 后，任务被分发到多台 VM 上并行执行，大大提升了吞吐量。
+* 实现高可用：RabbitMQ 和 Celery Worker 都可以部署多个节点。即使某个 Worker 宕机，任务消息还在队列里，其他 Worker 可以接手继续执行，保证了系统的稳定性。
+* 处理长耗时任务：数据清洗、模型训练、ETL 任务往往需要运行几小时甚至几天。这种架构支持任务的异步执行，Airflow 发完指令后就不用管了，由 Celery Worker 在后台默默执行，不会阻塞调度器。
+* 资源弹性伸缩：当任务队列积压很多时，你可以快速在 GCP 上启动新的 VM 加入 Celery 集群（Scale Out）；任务少的时候可以关掉 VM（Scale In），非常灵活。
 
-3. 实现细节解析
- * ac:rich-text-body vs ac:plain-text-body:
-   * Rich Text: 用于可以包含其他 HTML 标签（如 <p>, <b>）的宏，比如 Info Panel。
-   * Plain Text: 用于纯文本内容，比如代码块，通常配合 <![CDATA[ ... ]]> 使用，防止代码里的 < 或 & 破坏 XML 结构。
- * 多标签页 (Tabs):
-   如果是 Confluence Cloud 原生，通常使用 Expand 宏来实现折叠。如果需要真正的 Tabs，通常需要第三方插件，对应的宏名称可能是 ac:name="tabs"。
-详尽文档：实现步骤建议
- * 第一步：定义 Builder 类：将上面的 ConfluenceContentBuilder 放入一个独立的 utils.py 文件中。
- * 第二步：更新 API 配置：在你的请求头中确保 Content-Type: application/json。
- * 第三步：测试宏渲染：先尝试最简单的 add_info_panel，在 Confluence 页面查看是否显示为蓝色的信息框。
-关于图片嵌入，你是否需要我为你写一个专门处理“本地图片上传并自动插入页面”的完整工作流函数？
+3. 典型应用场景
+
+* 大数据 ETL 流水线：每天定时从各个业务数据库抽取数据，经过清洗转换（Transform）后加载到数据仓库（如 BigQuery）。
+* 机器学习流水线 (MLOps)：定期重新训练 AI 模型，包括数据预处理、特征工程、模型训练、模型评估和部署。
+* 报表系统：生成复杂的业务报表，涉及多表关联和聚合计算。
+* 数据质量监控：定时检查数据的一致性、完整性和准确性。
+
+总结：你在 GCP 上搭建的这套环境，是一个功能非常完整的数据流水线作业平台。它非常适合处理企业级的数据密集型任务，能够确保任务按时、可靠、高效地运行。
