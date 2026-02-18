@@ -1,0 +1,111 @@
+在 Google ADK 中构建 MCP Agent 的核心逻辑是：ADK Agent 作为 MCP Client，通过 
+"MCPToolset" 连接并调用 MCP Server 提供的工具。根据你的需求（连接 Google Cloud 环境），你需要先构建一个能访问 GCP 的 MCP Server，再在 ADK 中集成它。
+
+以下是具体的构建步骤与代码示例：
+
+1. 构建 GCP MCP Server（提供工具）
+
+首先，你需要创建一个 MCP Server，它负责封装访问 Google Cloud 的 API。这里以检查 Compute Engine 实例为例。
+
+文件：
+"gcp_mcp_server.py"
+
+import asyncio
+from mcp.server.fastmcp import FastMCP
+from google.cloud import compute_v1
+
+# 创建 MCP 服务器实例
+mcp = FastMCP("GCP Inspector")
+
+@mcp.tool(description="List all Compute Engine instances in a project")
+async def list_instances(project_id: str, zone: str) -> str:
+    """Lists all instances in the specified zone."""
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=project_id,
+        zone=zone,
+    )
+    instances = client.list(request=request)
+    
+    result = []
+    for instance in instances:
+        result.append(f"Name: {instance.name}, Status: {instance.status}")
+    
+    return "\n".join(result) if result else "No instances found."
+
+@mcp.tool(description="Get details of a specific instance")
+async def get_instance(project_id: str, zone: str, instance_name: str) -> str:
+    """Gets details of a specific instance."""
+    client = compute_v1.InstancesClient()
+    request = compute_v1.GetInstanceRequest(
+        project=project_id,
+        zone=zone,
+        instance=instance_name,
+    )
+    instance = client.get(request=request)
+    return f"Name: {instance.name}, Machine Type: {instance.machine_type}"
+
+if __name__ == "__main__":
+    # 启动服务器（使用 SSE 传输，便于 ADK 连接）
+    mcp.run(transport="sse", host="localhost", port=3000)
+
+2. 在 ADK 中构建 MCP Agent（使用工具）
+
+在 ADK 中，使用 
+"MCPToolset" 连接上述服务器，并将获取的工具注册给 Agent。
+
+文件：
+"adk_mcp_agent.py"
+
+import asyncio
+from google.adk.agents.llm_agent import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, SseServerParams
+
+async def main():
+    # 1. 配置 MCP 连接参数（SSE 模式）
+    sse_params = SseServerParams(
+        url="http://localhost:3000/sse",  # 对应 MCP Server 的地址
+        # 如果需要认证，可在此添加 headers
+    )
+    
+    # 2. 创建 MCP 工具集（连接服务器并获取工具）
+    mcp_toolset = MCPToolset(connection_params=sse_params)
+    tools = await mcp_toolset.get_tools()  # 获取服务器提供的所有工具
+    
+    # 3. 创建 ADK Agent，并注入 MCP 工具
+    agent = LlmAgent(
+        model=LiteLlm(model="gemini-2.0-flash"),  # 使用 Gemini 模型
+        name="GCP Inspector Agent",
+        instruction="You are an expert at inspecting Google Cloud infrastructure. Use the provided tools to check instances.",
+        tools=tools  # 关键：将 MCP 工具注入 Agent
+    )
+    
+    # 4. 运行 Agent 进行测试
+    result = await agent.run_async("List all instances in project my-project and zone us-central1-a")
+    print(result.final_output)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+3. 运行流程
+
+1. 启动 MCP Server：在终端运行 
+"python gcp_mcp_server.py"，服务器将在 
+"localhost:3000" 监听。
+2. 运行 ADK Agent：在另一个终端运行 
+"python adk_mcp_agent.py"。ADK 会自动连接到 MCP Server，获取 
+"list_instances" 等工具，并让 LLM 调用它们来回答你的问题。
+
+4. 关键配置说明
+
+* 传输协议：示例使用了 SSE (Server-Sent Events)，这是远程 MCP 连接的推荐方式。如果你的 MCP Server 和 ADK Agent 在同一台机器上，也可以使用 Stdio 模式（通过命令行启动子进程）。
+* 工具发现：
+"MCPToolset.get_tools()" 会自动将 MCP Server 中定义的函数（如 
+"list_instances"）转换为 ADK Agent 可以识别的 
+"BaseTool" 对象。
+* GCP 认证：确保你的环境已配置好 Google Cloud 凭据（如设置 
+"GOOGLE_APPLICATION_CREDENTIALS" 环境变量），这样 MCP Server 中的 
+"compute_v1" 客户端才能正常访问你的云环境。
+
+通过这种方式，你的 ADK Agent 就具备了直接操作 Google Cloud 资源的能力，可以用于基础设施检查、部署验证等任务。
