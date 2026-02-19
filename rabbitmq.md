@@ -14,6 +14,121 @@ RabbitMQ 4.x 相比 3.x 有重大架构变化（如强制 Quorum Queues、移除
 
 这是生产环境最安全的选择，可以完全保留数据并实现无缝切换。
 
+这是一个非常好的问题！让我搜索一下 RabbitMQ 官方关于版本升级路径的具体解释：
+
+太好了，我找到了官方解释！让我为你详细解释为什么必须从 3.13 才能升级到 4.x，而不能从 3.11 直接跳过去。
+
+---
+
+🔍 核心原因：特性标志（Feature Flags）机制
+
+RabbitMQ 从 3.8 开始引入 Feature Flags 机制，这是为了允许集群在不中断服务的情况下逐步启用新功能。但这也导致了版本升级的硬性依赖链。
+
+官方明确声明：
+
+> "This release series only supports upgrades from `3.13.x`. This release requires all feature flags in the 3.x series (specifically `3.13.x`) to be enabled before upgrading, there is no upgrade path from 3.12.14 (or a later patch release) straight to `4.0.0`."
+
+"You can only upgrade to RabbitMQ 4.0 from RabbitMQ 3.13.x. Don't forget to enable all stable feature flags while still on 3.13, before attempting an upgrade to RabbitMQ 4.0, or the upgrade will fail."
+
+---
+
+🧩 为什么不能跳过 3.12 → 3.13 直接到 4.0？
+
+1. 特性标志的累积依赖
+
+每个次要版本（3.11、3.12、3.13）都会引入新的特性标志，而这些标志在后续版本中会变成必需（Required）：
+
+版本	引入的新特性标志（部分关键）	到下一版本的要求	
+3.11	`classic_mirrored_queue_version`, `quorum_queue` 等	3.12 要求这些必须启用	
+3.12	`stream_filtering`, `stream_queue_coordinator_procs` 等	3.13 要求这些必须启用	
+3.13	`detailed_queues_endpoint`, `message_containers`, `stream_update_config_command` 等	4.0 要求这些必须启用	
+
+关键问题：3.11 根本不知道 3.13 和 4.0 需要哪些特性标志！
+
+看一个真实案例：
+- 用户从 3.12.10 直接升级到 4.0.5
+- 报错：`Feature flags: 'stream_filtering': required feature flag not enabled!`
+- 回滚到 3.12.10 后发现根本没有 `stream_filtering` 这个标志！
+- 因为这个标志是在 3.13 才引入的，3.12 无法启用一个不存在的标志
+
+2. Schema 数据库（Mnesia/Khepri）的元数据格式变更
+
+RabbitMQ 使用 Mnesia（3.x 默认）或 Khepri（4.x 可选）存储元数据。每次版本升级都可能涉及：
+
+- 内部表结构变更（如队列元数据、绑定信息存储格式）
+- Erlang 术语（Term）格式的兼容性
+- 集群状态机的协议变更
+
+3.13 是 3.x 系列的最后一个版本，它包含了所有 3.x 时代的元数据迁移逻辑。4.0 只保留了从 3.13 格式迁移到 4.0 格式的逻辑，没有保留从 3.11 或 3.12 迁移的逻辑。
+
+3. Khepri 元数据存储的重大变更
+
+RabbitMQ 在 3.13 实验性引入了 Khepri 作为 Mnesia 的替代：
+- 3.13 的 Khepri 实现与 4.0 的 Khepri 不兼容
+- 如果在 3.13 启用了 `khepri_db` 特性标志，反而不能升级到 4.0
+- 4.0 的 Khepri 是稳定版，内部实现有重大变更
+
+这进一步证明了 3.13 是一个"转换垫"版本，负责处理所有 3.x 到 4.x 的过渡逻辑。
+
+---
+
+🛡️ 为什么 Blue-Green 可以跳过中间版本？
+
+你们计划用 Blue-Green 升级，这确实是唯一可以跳过中间版本的方法：
+
+> "Alternatively, instead of a series of upgrades, you can use a Blue/Green upgrade and move directly to `4.0.x` that way. It is more involved but works even for multi-minor gaps, e.g. 3.8.x => 4.0.x upgrades."
+
+原因：
+- Blue-Green 是迁移（Migration）而非升级（Upgrade）
+- 你在 Green 集群（4.x）是全新部署，不继承 Blue 集群（3.x）的元数据状态
+- 通过 Federation/Shovel 同步的是消息数据，而非集群元数据
+- 4.x 只需要处理消息格式，而消息格式（AMQP 0-9-1/1.0）在 3.x 和 4.x 之间是兼容的
+
+---
+
+📋 具体到你的情况（3.11 → 4.x）
+
+如果选择原地滚动升级（不推荐）：
+
+```
+3.11.9 → 3.11.18 → 3.12.x → 3.13.x → 4.0.x
+```
+
+每个箭头都是一次集群重启+元数据迁移，生产环境风险极高。
+
+如果选择Blue-Green（推荐）：
+
+```
+3.11.x (Blue) ──Federation/Shovel──► 4.0.x (Green)
+         \                          /
+          \_____ 直接切换流量 _______/
+```
+
+跳过所有中间版本，因为 Green 是全新集群，没有历史包袱。
+
+---
+
+⚠️ 重要提醒
+
+即使使用 Blue-Green，也要注意：
+
+1. 客户端兼容性：确保生产者/消费者客户端支持 4.x（如 C# 客户端需 7.0+）
+2. 队列类型：3.11 的 Classic Mirrored Queues 在 4.x 已移除，需要提前迁移到 Quorum Queues
+3. Erlang 版本：4.x 要求 Erlang 26.2+，与 3.11 可能不兼容
+4. 配置变更：4.x 有一些配置项变化（如 MQTT 默认用户配置）
+
+---
+
+🎯 总结
+
+问题	答案	
+为什么不能 3.11 → 4.0？	3.11 缺少 3.12/3.13 引入的特性标志，无法启用 4.0 所需的标志	
+为什么必须 3.13 才能到 4.0？	3.13 是 3.x 最后一个版本，包含所有到 4.x 的迁移逻辑	
+Blue-Green 为什么可以跳过？	因为是新建集群，不涉及元数据迁移，只同步消息	
+生产环境推荐？	Blue-Green，零停机、可回滚、跳过中间版本	
+
+你们的 Blue-Green 方案是最明智的选择，既避免了复杂的阶梯升级，又保证了生产稳定性。
+
 ---
 
 📋 前置检查清单
