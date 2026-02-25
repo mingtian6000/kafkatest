@@ -1,32 +1,129 @@
-RabbitMQ 4.0 相比 3.x 版本（特别是 3.13）有几个重大且不兼容的架构变化，主要涉及数据复制机制和核心协议。如果你正在规划升级，这些是必须关注的“硬骨头”。
+'''
+#!/usr/bin/env python3
+from mcp.server.fastmcp import FastMCP
+from google.cloud import compute_v1
+from google.oauth2 import service_account
+from datetime import datetime, timezone
+import os
 
-1. 最重大的变化：经典镜像队列被移除
+mcp = FastMCP("Google Cloud Compute MCP")
 
-这是最核心的破坏性变更。RabbitMQ 4.0 彻底移除了“经典镜像队列”（Classic Mirrored Queues）功能。
+def get_gcp_client():
+    """获取 GCP 客户端，支持环境变量或默认凭据"""
+    credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    if credentials_path and os.path.exists(credentials_path):
+        credentials = service_account.Credentials.from_service_account_file(credentials_path)
+        return compute_v1.ImagesClient(credentials=credentials), compute_v1.InstancesClient(credentials=credentials)
+    return compute_v1.ImagesClient(), compute_v1.InstancesClient()
 
-* 3.x 时代：高可用（HA）主要依赖“经典镜像队列”，通过策略（Policy）设置 
-"ha-mode: all" 来复制数据。
-* 4.0 时代：“仲裁队列”（Quorum Queues） 成为唯一的官方推荐的高可用队列类型。它基于 Raft 共识算法，数据安全性远高于旧版镜像队列。
+@mcp.tool()
+async def list_vm_instances(project_id: str, zone: str) -> str:
+    """列出指定区域的所有 VM 实例及其详细信息"""
+    try:
+        _, instance_client = get_gcp_client()
+        request = compute_v1.ListInstancesRequest(project=project_id, zone=zone)
+        instances = instance_client.list(request)
+        
+        result = []
+        for instance in instances:
+            # 获取启动磁盘镜像信息
+            boot_disk = instance.disks[0] if instance.disks else None
+            image_info = boot_disk.source if boot_disk else "N/A"
+            
+            result.append({
+                "name": instance.name,
+                "status": instance.status,
+                "machine_type": instance.machine_type.split('/')[-1],
+                "internal_ip": instance.network_interfaces[0].network_ip if instance.network_interfaces else "N/A",
+                "external_ip": instance.network_interfaces[0].access_configs[0].nat_i_p if instance.network_interfaces and instance.network_interfaces[0].access_configs else "N/A",
+                "boot_image": image_info,
+                "creation_time": instance.creation_timestamp
+            })
+        
+        return f"Found {len(result)} instances in zone {zone}:\n" + "\n".join([str(vm) for vm in result])
+    except Exception as e:
+        return f"Error listing instances: {str(e)}"
 
-⚠️ 升级风险：如果你现有的集群使用了经典镜像队列，升级到 4.0 后，这些队列将自动降级为单副本的非镜像队列，失去高可用性。你必须提前将数据迁移到仲裁队列。
+@mcp.tool()
+async def get_vm_details(project_id: str, zone: str, instance_name: str) -> str:
+    """获取特定 VM 实例的详细信息"""
+    try:
+        _, instance_client = get_gcp_client()
+        request = compute_v1.GetInstanceRequest(project=project_id, zone=zone, instance=instance_name)
+        instance = instance_client.get(request)
+        
+        details = {
+            "name": instance.name,
+            "status": instance.status,
+            "machine_type": instance.machine_type,
+            "cpu_platform": instance.cpu_platform,
+            "creation_time": instance.creation_timestamp,
+            "labels": instance.labels if instance.labels else {}
+        }
+        
+        # 网络信息
+        if instance.network_interfaces:
+            network = instance.network_interfaces[0]
+            details["network"] = {
+                "network": network.network,
+                "subnetwork": network.subnetwork,
+                "internal_ip": network.network_ip,
+                "external_ip": network.access_configs[0].nat_i_p if network.access_configs else None
+            }
+        
+        return str(details)
+    except Exception as e:
+        return f"Error getting VM details: {str(e)}"
 
-2. 性能与协议：AMQP 1.0 成为核心
+@mcp.tool()
+async def list_images(project_id: str) -> str:
+    """列出项目中的所有镜像"""
+    try:
+        image_client, _ = get_gcp_client()
+        request = compute_v1.ListImagesRequest(project=project_id)
+        images = image_client.list(request)
+        
+        result = []
+        for image in images:
+            result.append({
+                "name": image.name,
+                "family": image.family if image.family else "N/A",
+                "status": image.status,
+                "disk_size_gb": image.disk_size_gb,
+                "creation_timestamp": image.creation_timestamp
+            })
+        
+        return f"Found {len(result)} images in project {project_id}:\n" + "\n".join([str(img) for img in result])
+    except Exception as e:
+        return f"Error listing images: {str(e)}"
 
-AMQP 1.0 协议在 4.0 中从“插件”升级为“核心协议”，性能得到了显著优化。
+@mcp.tool()
+async def check_image_age_warning(project_id: str, max_age_days: int = 90) -> str:
+    """检查镜像是否超过指定天数，发出警告"""
+    try:
+        image_client, _ = get_gcp_client()
+        request = compute_v1.ListImagesRequest(project=project_id)
+        images = image_client.list(request)
+        
+        now = datetime.now(timezone.utc)
+        warnings = []
+        
+        for image in images:
+            if image.creation_timestamp:
+                # 解析时间戳
+                created_time = datetime.fromisoformat(image.creation_timestamp.rstrip('Z')).replace(tzinfo=timezone.utc)
+                age_days = (now - created_time).days
+                
+                if age_days > max_age_days:
+                    warnings.append(f"⚠️ WARNING: Image '{image.name}' is {age_days} days old (threshold: {max_age_days} days)")
+        
+        if warnings:
+            return "\n".join(warnings)
+        else:
+            return f"✅ All images in project {project_id} are within the {max_age_days}-day age threshold."
+    except Exception as e:
+        return f"Error checking image age: {str(e)}"
 
-* 吞吐量翻倍：官方测试显示，AMQP 1.0 在 4.0 中的峰值吞吐量比 3.13 高出两倍以上，甚至在某些场景下略优于 AMQP 0.9.1。
-* 内存占用更低：新的实现减少了每个连接的内存开销，集群能支持更多的并发连接。
-
-3. 元数据存储：Khepri 成为正式选项
-
-Khepri 是一个基于 Raft 的新元数据存储引擎，在 3.13 中还是实验性功能，在 4.0 中已成为完全支持的稳定功能。
-
-* 优势：相比旧的 Mnesia，Khepri 在网络分区恢复、删除队列/交换机的效率上表现更好，整体性能更稳定。
-* 注意：如果你在 3.13 中启用了 Khepri，无法直接原地升级到 4.0，必须采用蓝绿部署策略。
-
-总结：升级建议
-
-1. 先改队列类型：在升级前，必须将生产环境中的“经典镜像队列”迁移到“仲裁队列”或“流（Streams）”。
-2. 检查插件兼容性：确认你使用的第三方插件是否支持 4.0。
-3. 利用性能红利：升级后，可以尝试启用 AMQP 1.0 或 Khepri 来获得更好的性能。
-
+if __name__ == "__main__":
+    mcp.run()
+'''
