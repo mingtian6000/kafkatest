@@ -1,4 +1,4 @@
-'''python
+```
 #!/usr/bin/env python3
 from mcp.server.fastmcp import FastMCP
 from google.cloud import compute_v1
@@ -126,4 +126,4 @@ async def check_image_age_warning(project_id: str, max_age_days: int = 90) -> st
 
 if __name__ == "__main__":
     mcp.run()
-'''
+```
