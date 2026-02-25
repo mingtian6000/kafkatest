@@ -1,4 +1,4 @@
-'''
+'''python
 #!/usr/bin/env python3
 from mcp.server.fastmcp import FastMCP
 from google.cloud import compute_v1
