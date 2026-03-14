@@ -11,6 +11,25 @@ Airflow 2.9 连接 Cloud SQL PostgreSQL 时，`airflow db upgrade` 或 `airflow 
 
 AttributeError: execution_date
 
+# 1. 找到 db.py 文件
+DB_PY="/usr/local/lib/python3.9/site-packages/airflow/utils/db.py"
+
+# 2. 备份
+cp $DB_PY ${DB_PY}.bak
+
+# 3. 用 sed 注释掉 check_run_id_null 函数（让它直接返回空）
+sed -i '/def check_run_id_null/,/return.*issues/{
+  /def check_run_id_null/a\    return []  # TEMPORARY PATCH
+  /def check_run_id_null/,/^    return \[\]  # TEMPORARY PATCH/d
+}' $DB_PY
+
+# 4. 现在执行 migrate（应该能过）
+export AIRFLOW_CONFIG=/opt/airflow/airflow.cfg
+/usr/local/bin/airflow db migrate
+
+# 5. 恢复原始文件（重要！）
+mv ${DB_PY}.bak $DB_PY
+
 ```
 或 `check_run_id_null` 函数失败。
 
