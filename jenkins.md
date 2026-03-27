@@ -89,3 +89,58 @@ BEGIN {OFS=","; print "branch,last_commit,committer,stale_days"}
     print $1, $2, $3, days
   }
 }' all_branches.csv > stale_branches.csv
+
+script {
+    def query = '''
+        query($owner: String!, $repo: String!, $cursor: String) {
+            repository(owner: $owner, name: $repo) {
+                refs(refPrefix: "refs/heads/", first: 100, after: $cursor) {
+                    nodes {
+                        name
+                        target {
+                            ... on Commit {
+                                committedDate
+                            }
+                        }
+                        # 关键：查询 protection 规则的详细配置
+                        branchProtectionRule {
+                            id
+                            # 真正的限制条件：
+                            requiresApprovingReviews
+                            requiredStatusChecks {
+                                context
+                            }
+                            # 如果这俩是 true，说明可以删除/force push，不算严格保护
+                            allowsDeletions  
+                            allowsForcePushes
+                            # 或检查是否匹配命名模式
+                            pattern
+                        }
+                    }
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+        }
+    '''
+    
+    def result = sh(
+        script: """
+            export GH_HOST="${GHE_HOST}"
+            gh api graphql -f query='${query}' -f owner=${OWNER} -f repo=${REPO} -q '
+                .data.repository.refs.nodes[] | 
+                select(.branchProtectionRule != null) |
+                select(.branchProtectionRule.requiresApprovingReviews == false) |  # 不需要 review
+                select(.branchProtectionRule.allowsDeletions == true) |             # 允许删除
+                "\\(.name)|\\(.target.committedDate)"
+            '
+        """,
+        returnStdout: true
+    ).trim()
+    
+    // 这样筛选出来的是：虽然有 protection rule（命名规则），但允许删除的分支
+    echo "Deletable branches: ${result}"
+}
+
