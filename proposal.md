@@ -1,3 +1,4 @@
+```
 jq -s '
 if length > 0 then
   "<h2>🔍 Stale Branches Detected</h2>The following branches have not been updated for more than '"${DAYS_THRESHOLD}"' days:<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse: collapse; font-family: Arial, sans-serif; width: 100%;\">Branch NameLast CommitDays Ago" +
