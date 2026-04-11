@@ -1,192 +1,124 @@
-以下是符合 Confluence 页面兼容 和 Markdown 格式的文档，包含所有要求的结构（表格留空待填、流程描述、PR 逻辑、Stale Branch 检测规划）：
+Cassandra Backup with DSBulk – Confidence Page
 
-Branching Strategy (Enforced from FDZ 3.0)
+1. Overview
 
-Created by Alice Wang • Last updated Just a moment ago • 1 minute read
+This document describes the process of backing up a production Cassandra cluster using DataStax Bulk Loader (DSBulk).
 
-Background
+The production Cassandra cluster is configured with 3 racks, each containing 3 nodes (pods). DSBulk connects to a single, healthy pod to perform a full, consistent backup of designated tables during a scheduled maintenance window, with minimal operational impact.
 
-Our codebase has suffered from uncontrolled branch proliferation, long - lived PRs (often open for months), and resulting code inconsistency across features/releases. This chaos has led to:
+2. Prerequisites
 
-- Merging conflicts that are time - consuming to resolve.
-- Inconsistent behavior between development, staging, and production environments.
-- Difficulty in tracing which changes belong to which feature or release.
+- Access & Credentials: Network access and valid authentication credentials (username/password) for a Cassandra pod.
+- DSBulk Installation: DSBulk is installed and available on the backup server or execution host.
+- Storage: Sufficient storage space in the target backup directory (
+"/path/to/backup/").
+- Environment: The chosen Cassandra pod is healthy and part of the production cluster.
 
-To address these issues, we are enforcing a standardized branching strategy from FDZ 3.0 onward.
+3. Backup Strategy & Scheduling
 
-Active Repos & Protected Branches
+- Connection Point: DSBulk will connect to one healthy pod in the cluster. In Cassandra, connecting to one node is sufficient to access all data distributed across the cluster.
+- Schedule: Execute during a predefined maintenance window or off-peak hours to minimize performance impact.
+- Scope: Backup all keyspaces, or a specific list of keyspaces and tables, as required.
 
-This section defines which repositories are active and which branches are protected (cannot be deleted or force - pushed without approval).
+4. Backup Procedure
 
-Repository Name Protected Branches Notes (e.g., Purpose)
-[To be filled] [To be filled] [To be filled]
+4.1. Identify a Healthy Pod
 
-Core Reviews
+Select a pod from the cluster that is in 
+"Up" and 
+"Normal" (UN) state. Verify using 
+"nodetool status" or your cluster management tool.
 
-This section outlines the core review process for pull requests (PRs).
+4.2. Execute the DSBulk Unload (Backup) Command
 
-Review Type Required Reviewers Approval Threshold Notes
-[To be filled] [To be filled] [To be filled] [To be filled]
+Run a command in the following format. Adjust the 
+"-h" (host), credentials, keyspace, table, and backup path as needed.
 
-PR Process & Branch Workflow
+# Example: Backup a specific table
+dsbulk unload \
+  -h <CASSANDRA_POD_IP> \
+  -u <USERNAME> \
+  -p <PASSWORD> \
+  -k <KEYSPACE> \
+  -t <TABLE_NAME> \
+  --connector.csv.url /path/to/backup/keyspace_table \
+  --maxConcurrentFiles 1
 
-We follow a two - stage PR workflow to ensure code quality and release stability:
+# Example: Backup an entire keyspace
+dsbulk unload \
+  -h 10.1.2.3 \
+  -u cassandra_user \
+  -p 'secure_password' \
+  -k my_keyspace \
+  --connector.csv.url /backup/data/my_keyspace \
+  --maxConcurrentFiles 1
 
-1. Feature Development & Protection
+Key Parameters & Notes:
 
-- All 
-"feature/*" branches are protected (no direct pushes; all changes require a PR).
-- Developers create a 
-"feature/<JIRA - TICKET - ID>-<SHORT - DESCRIPTION>" branch from 
-"main" (or 
-"develop").
-- A PR must be opened from 
-"feature/*" → 
-"feature" (a shared “feature integration” branch) for initial review.
+- 
+"-h": The IP/hostname of the selected healthy pod.
+- 
+"-k": The keyspace to back up.
+- 
+"-t": (Optional) A specific table to back up. Omit to back up all tables in the keyspace.
+- 
+"--connector.csv.url": The directory where DSBulk will write CSV backup files. Subdirectories for each table are created automatically.
+- 
+"--maxConcurrentFiles 1": A recommended setting for backup to reduce load. Increase with caution.
+- Consistency: Consider using 
+"-cl ONE" (or 
+"LOCAL_QUORUM") for performance if eventual consistency is acceptable for the backup. For full consistency, use 
+"-cl ALL" (with potential performance impact).
+- Best Practice: Run a test backup on a non-production cluster first to validate the process and storage requirements.
 
-2. Merge Flow (Feature → Release → Production)
+4.3. Verify Backup Success
 
-1. Feature → Feature Integration:
-   - After the PR from 
-"feature/*" → 
-"feature" is approved, the branch is merged into 
-"feature".
-   - The 
-"feature" branch acts as a staging area for all in - progress features.
-2. ture → Release:Fea - Once the 
-"feature" branch is stable (all planned features are merged and tested), a PR is opened from 
-"feature" → 
-"release/*" (e.g., 
-"release/1.2.0").
-   - Rejection Rule: PRs submitted directly to 
-"release/*" (bypassing 
-"feature") will be rejected immediately to enforce the two - stage flow.
-3. Release → Production:
-   - After the PR from 
-"feature" → 
-"release/*" is approved and tested, the 
-"release/*" branch is merged into 
-"production".
-   - The 
-"release/*" branch is then tagged (e.g., 
-"v1.2.0") to mark the stable release version.
+1. Check DSBulk Logs: Review the command-line output for a success message and summary of rows unloaded.
+2. Validate Files: Ensure backup files (
+".csv" and 
+".csv.metadata") are created in the target directory.
+ls -lh /path/to/backup/
+3. Optional Data Check: Perform a quick row count comparison between a source table and the backup file (e.g., using 
+"wc -l" on the CSV and a simple 
+"COUNT" query in 
+"cqlsh").
 
-Visual Workflow (Mermaid Diagram)
+5. Restore Procedure (for Confidence)
 
-graph TD
-    A[Developer: Create feature/branch] --> B[PR: feature/* → feature]
-    B --> C{Approved?}
-    C -->|Yes| D[Merge to feature]
-    D --> E[PR: feature → release/*]
-    E --> F{Approved?}
-    F -->|Yes| G[Merge to release/*]
-    G --> H[Tag release: vX.Y.Z]
-    H --> I[PR: release/* → production]
-    I --> J{Approved?}
-    J -->|Yes| K[Merge to production]
-    C -->|No| L[Revise & Resubmit]
-    F -->|No| L
-    J -->|No| L
-    M[Direct PR to release/*] --> N[REJECTED]
+A backup is only as good as your ability to restore. Test this procedure periodically in a non-production environment.
 
-Stale Branch Detection & Reporting
+5.1. Restore Using DSBulk Load
 
-We use a Jenkins Pipeline to detect and report stale branches:
+To restore data to a table (e.g., after a truncation or into a test cluster), use the 
+"dsbulk load" command.
 
-1. Detection Logic
+dsbulk load \
+  -h <TARGET_CLUSTER_POD_IP> \
+  -u <USERNAME> \
+  -p <PASSWORD> \
+  -k <KEYSPACE> \
+  -t <TABLE_NAME> \
+  --connector.csv.url /path/to/backup/keyspace_table \
+  --maxConcurrentFiles 1
 
-- Definition of “Stale”: A branch is stale if it has had no commits for [X] days (configurable via Jenkins parameter, e.g., 30/60/90 days).
-- Report Columns:
-   - Branch Name
-   - Last Commit Date
-   - Last Commit Author (Owner)
+Note: Ensure the target table schema exists before running the load operation.
 
-2. Jenkins Pipeline Workflow
+6. Scheduling & Automation
 
-- Schedule: Runs every 2–3 days (via 
-"cron" trigger).
-- Output: Generates a CSV report (
-"stale_branches_<DATE>.csv") with all stale branches.
-- Notification: Sends an email alert to the team with the report, highlighting branches that need cleanup.
+- Cron Job (Example): Schedule the backup command (from 4.2) using a cron job on the backup server.
+# Example: Run every Sunday at 2 AM
+0 2 * * 0 /usr/bin/dsbulk unload [options] > /var/log/cassandra_backup.log 2>&1
+- Logging & Monitoring: Redirect logs to a file and implement monitoring to check for job success/failure.
 
-3. Cleanup Policy
+7. Troubleshooting Common Issues
 
-- Stale branches will be reviewed by the team.
-- If a stale branch has no active PRs or ongoing work, it will be archived or deleted after approval.
+- Connection Errors: Verify network connectivity, pod status, and credentials.
+- Permission Errors: Ensure the backup directory is writable and Cassandra user has the necessary permissions (
+"SELECT" on tables, 
+"MODIFY" on keyspace if using certain options).
+- Insufficient Space: Monitor disk space in the backup directory.
+- Performance Impact: If the backup causes high load, consider further throttling with 
+"--maxConcurrentFiles 1" and 
+"--executor.maxPerSecond" in DSBulk.
 
-Jenkins Pipeline Details
-
-The pipeline uses the 
-"gh" CLI (GitHub CLI) to fetch branch data and 
-"jq" to process it into a CSV.
-
-Sample Pipeline Script (Groovy)
-
-pipeline {
-    agent any
-    parameters {
-        choice(
-            name: 'STALE_DAYS',
-            choices: ['30', '60', '90'],
-            description: 'Days without commits to consider a branch stale'
-        )
-    }
-    triggers {
-        cron('H 2 */2 * *') // Run every 2 days at ~2 AM
-    }
-    environment {
-        GITHUB_TOKEN = credentials('github-token')
-        GITHUB_OWNER = 'your-org'
-        GITHUB_REPO = 'your-repo'
-    }
-    stages {
-        stage('Checkout & Authenticate') {
-            steps {
-                sh '''
-                    gh auth status || gh auth login --with-token <<< "$GITHUB_TOKEN"
-                '''
-            }
-        }
-        stage('Detect Stale Branches') {
-            steps {
-                sh '''
-                    # Fetch branch data with last commit info
-                    gh api graphql -f query='
-                    query($owner: String!, $name: String!) {
-                      repository(owner: $owner, name: $name) {
-                        r
-
-Of course. Here is a detailed comparison of RabbitMQ's Mirrored Queues and Quorum Queues, focusing on their mechanisms, trade-offs, and use cases.
-
-Core Comparison: Mirrored Queues vs. Quorum Queues
-
-Aspect Mirrored Queues (Classic) Quorum Queues (Modern)
-Replication Mechanism Leader/Follower (Master/Slave) with asynchronous replication via the GM (Guaranteed Multicast) protocol. Raft consensus algorithm, with synchronous replication requiring a quorum of nodes to acknowledge each write.
-Data Consistency Eventual Consistency (Weak). Writes are confirmed as soon as the leader accepts them. Followers may lag, leading to potential data loss if the leader fails before replication completes. Strong Consistency. A write is only confirmed after a majority (N/2+1) of replicas have persisted it, guaranteeing no acknowledged data is lost.
-Failure Handling Automatic failover via RabbitMQ's internal promotion mechanism. This process can be complex during network partitions and may lead to split-brain scenarios, requiring manual intervention. Automatic leader election via the Raft protocol. It is designed to handle failures and network partitions gracefully without data loss or split-brain conditions.
-Performance Higher throughput, lower latency. Producers are not blocked waiting for replicas, making it ideal for high-volume workloads where speed is critical. Lower throughput, higher latency. The quorum acknowledgment adds overhead. Performance scales with the number of replicas and network latency.
-Primary Use Case High-throughput, latency-sensitive applications where the loss of a few in-flight messages is acceptable (e.g., log aggregation, real-time telemetry, non-critical tasks). Mission-critical data where absolute data safety is paramount and performance is a secondary concern (e.g., financial transactions, order processing, audit logs).
-Recommended For Legacy systems or scenarios where ultimate performance is the top priority. Default choice for new deployments on RabbitMQ 3.8+, as it provides superior data safety and simpler operational semantics.
-
-Detailed Technical Breakdown
-
-Mirrored Queues
-
-* How it works: One queue has a single leader (master) on one node and one or more mirrors (slaves) on other nodes. The leader handles all operations and asynchronously replicates state changes to the mirrors.
-* Key Benefit: Performance. The leader can acknowledge operations immediately, offering excellent speed.
-* Key Drawback: Data Safety & Complexity. The weak consistency model and the potential for split-brain during network partitions are its main weaknesses. Configuration and monitoring of mirroring policies (
-"ha-mode", 
-"ha-sync-mode") can be complex.
-
-Quorum Queues
-
-* How it works: The queue is a Raft replication group distributed across multiple nodes. All operations go through the elected Raft leader. A write is successful only after a quorum of nodes in the group have durably stored it.
-* Key Benefit: Data Safety. The Raft protocol guarantees strong consistency, linearizability, and automatic, safe leader election, eliminating split-brain and ensuring no acknowledged writes are lost.
-* Key Drawback: Performance & Resource Overhead. The synchronous replication adds inherent latency. Each queue is a full Raft state machine, consuming more memory and file descriptors than a mirrored queue.
-
-How to Choose?
-
-* Use Quorum Queues if: You are building a new system on RabbitMQ 3.8+ and your primary requirement is data integrity and safety. This should be your default choice for critical data flows. The simplified failure handling is a major operational advantage.
-* Use Mirrored Queues if: You are optimizing for maximum throughput and minimum latency for non-critical data, or you are maintaining a legacy system on an older RabbitMQ version. Be prepared to handle the complexity of mirroring policies and potential network partition recovery.
-
-Industry Trend: The RabbitMQ project explicitly recommends Quorum Queues as the primary HA queue type for modern deployments due to their stronger guarantees and simpler failure recovery, accepting the performance trade-off as a worthy cost for data safety.
+This document provides a standard framework. Always adapt commands and schedules to your specific environment, data size, and recovery objectives.
