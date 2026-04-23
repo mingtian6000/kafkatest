@@ -24,3 +24,37 @@ engine = create_engine(
 with engine.connect() as conn:
     result = conn.execute("SELECT 1")
     print(result.fetchone())
+
+import os
+import psycopg2
+from google.auth import default
+from google.auth.transport.requests import Request
+
+def get_db_connection():
+    """通过 Unix socket 连接 Cloud SQL，使用 IAM 认证"""
+    
+    # 1. 获取 IAM 令牌
+    credentials, project = default()
+    credentials.refresh(Request())
+    iam_token = credentials.token
+    
+    # 2. 构建连接参数
+    instance_connection_name = os.environ.get('CLOUD_SQL_INSTANCE')  # 格式: project:region:instance
+    db_name = os.environ.get('DB_NAME')
+    db_user = os.environ.get('DB_IAM_USER')  # 格式: sa-name@project-id.iam
+    
+    # 3. Unix socket 路径
+    unix_socket_path = f"/cloudsql/{instance_connection_name}/.s.PGSQL.5432"
+    
+    # 4. 建立连接
+    conn = psycopg2.connect(
+        host=unix_socket_path,  # 关键：使用 Unix socket 路径作为 host
+        database=db_name,
+        user=db_user,
+        password=iam_token,  # 使用 IAM 令牌作为密码
+        sslmode='disable',  # 通过 Unix socket 连接时不需要 SSL
+    )
+    
+    return conn
+
+
