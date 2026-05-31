@@ -1,43 +1,162 @@
 ```
-你说到了一个非常核心的问题——“等靠要”的被动心态。这确实是团队效率的隐形杀手。我们需要在之前的讲话中，明确、有力地驳斥这种行为，并提出清晰的新标准。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-server-config
+  namespace: monitoring  # 请根据您的实际命名空间修改
+  labels:
+    app: prometheus
+    component: server
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'production'
+        source: 'prometheus-server'
 
-以下是整合了你新观点后的增强版讲话脚本，在“明确期望”部分增加了第四点，专门针对这一问题。
+    # 远程写入配置 - 启用 remote write
+    remote_write:
+      - url: "http://prometheus-server:9090/api/v1/write"  # Prometheus 自身的远程写入端点
+        # 可以添加其他远程存储地址，例如：
+        # - url: "http://thanos-receive:10908/api/v1/receive"  # Thanos Receive
+        # - url: "http://cortex-distributor:9009/api/prom/push"  # Cortex
+        # - url: "https://prometheus-remote-storage.gcp.com/api/v1/write"  # GCP Managed Service
+        
+        # 远程写入队列配置（优化性能）
+        queue_config:
+          # 每个分片的最大样本数（默认 10000）
+          capacity: 10000
+          # 每次发送的最大样本数（默认 1000）
+          max_samples_per_send: 1000
+          # 批处理超时时间（默认 5s）
+          batch_send_deadline: "5s"
+          # 最大重试次数（默认 3）
+          max_retries: 3
+          # 最小退避时间（默认 100ms）
+          min_backoff: "100ms"
+          # 最大退避时间（默认 5s）
+          max_backoff: "5s"
+          # 最大分片数（默认 200）
+          max_shards: 200
+          # 最小分片数（默认 1）
+          min_shards: 1
+        
+        # 重新标记配置（可选）
+        write_relabel_configs:
+          # 只保留 k6 相关的指标
+          - source_labels: [__name__]
+            regex: '(k6_.*|prometheus_.*|up)'
+            action: keep
+          # 添加额外的标签
+          - target_label: "data_source"
+            replacement: "k6_performance_test"
+        
+        # 如果需要认证，取消注释以下部分
+        # basic_auth:
+        #   username: "your_username"
+        #   password: "your_password"
+        # bearer_token: "your_bearer_token_here"
+        # bearer_token_file: "/path/to/bearer/token/file"
+        
+        # TLS 配置（如果需要）
+        # tls_config:
+        #   insecure_skip_verify: false
+        #   ca_file: "/path/to/ca.crt"
+        #   cert_file: "/path/to/client.crt"
+        #   key_file: "/path/to/client.key"
+        
+        # 代理配置（如果需要）
+        # proxy_url: "http://proxy.example.com:8080"
+        
+        # 远程写入超时（默认 30s）
+        remote_timeout: "30s"
+        
+        # 元数据配置
+        metadata_config:
+          # 是否发送元数据（默认 true）
+          send: true
+          # 发送间隔（默认 1m）
+          send_interval: "1m"
+        
+        # 示例限制（可选）
+        # sigv4: {}  # AWS SigV4 签名（用于 AWS Managed Service）
 
-增强版讲话脚本（融入“杜绝等靠要”）
+    # 远程读取配置（可选）
+    remote_read:
+      - url: "http://prometheus-server:9090/api/v1/read"
+        read_recent: true
 
-1. 开场与共情 (Setting the Stage & Empathy)
-
-“Team, I want to talk about something important today. I know everyone is working hard, but I feel we're getting stuck in a cycle of 'busy work'—where tasks slip, priorities get mixed, and issues surface at the last minute. This isn't about blaming anyone; it's about us stepping back and looking at how we can work better, together.”
-2. 提出核心理念转变 (Core Philosophy Shift)
-
-“We need to shift our mindset. Coming to work isn't just about putting in hours or clocking in and out. It's about solving problems and creating value. True productivity isn't measured by how busy we look, but by how many obstacles we remove, how clearly we communicate, and how effectively we move our key projects ahead.”
-3. 明确期望与具体要求 (Clear Expectations & Actions)
-
-“To make this happen, I expect the following from all of us:
-1. Proactive Transparency: Update your tasks regularly. If you're blocked, flag it early—don't wait until it's a crisis.
-2. Priority-Driven Work: Always ask, 'Is this the most important thing I should be doing right now for our team's goals?'
-3. Ownership of Outcomes: Take pride not in just completing a task, but in knowing that your work solved a real problem.
-
-4.  (新增重点) Eliminate the ‘Waiting For…’ Mentality.
-* “This is critical. ‘I’m waiting for someone’s reply’ is not an acceptable status for an extended period. We cannot be a team that just waits. If your progress depends on others, it is your responsibility to drive it.”
-* “Stop waiting, and start driving. Send a polite follow-up, pick up the phone, or walk over to their desk. If still blocked, escalate early. Your job is to remove roadblocks, not just to identify them and wait.”
-4. 总结与号召 (Closing & Call to Action)
-
-“Let's build a team that's known for getting things done and driving things forward, not for being busy or being stuck waiting. I'm counting on each of you to own this change. Let's start today.”
-
-如何强调“主动驱动”的行为
-
-你可以用这个对比来让理念更直观：
-
-* ❌ 我们不要这样说/想： “I'm stuck because I'm waiting for Alex's feedback.”
-* ✅ 我们应该这样说/做： “My next step depends on Alex's feedback. I have just sent him a second follow-up and CC'd the PM to highlight the urgency. I've also scheduled a quick sync for tomorrow morning to unblock this. Meanwhile, I'm moving on to Task B.”
-
-关键英文表达解析：
-
-* Eliminate the “Waiting For…” Mentality: 直指“等靠要”心态，要求“消除”它。
-* Drive it / Driver: 商业语境中“推动事情”最地道的词。
-* Your responsibility to drive it: 明确责任归属。
-* Remove roadblocks: “清除路障”，比“解决问题”更强调主动性。
-* Escalate early: “尽早升级（问题）”，是职场中重要的主动沟通方式。
-
-总结： 通过加入这第四点，你的讲话将直击“被动性”这一痛点，并把期望从“汇报问题”提升到“主动推动解决问题”。这能清晰地向团队传递出：“等待”不是一种状态，而是一个需要你立即去解决的“行动项”。
+    # 抓取配置
+    scrape_configs:
+      # Prometheus 自身监控
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+      
+      # 节点监控
+      - job_name: 'node-exporter'
+        static_configs:
+          - targets: ['node-exporter:9100']
+      
+      # k6 指标抓取（如果需要从 k6 直接抓取）
+      - job_name: 'k6-metrics'
+        static_configs:
+          - targets: ['k6-service:5656']  # k6 指标暴露端口
+        scrape_interval: 5s
+        metrics_path: '/metrics'
+        
+      # 其他应用监控
+      - job_name: 'your-application'
+        static_configs:
+          - targets: ['app-service:8080']
+        metrics_path: '/actuator/prometheus'
+        
+    # 告警规则配置
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+      
+    # 告警管理器配置
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['alertmanager:9093']
+              
+  # 告警规则文件（示例）
+  k6-alerts.yml: |
+    groups:
+      - name: k6_performance_alerts
+        rules:
+          # k6 成功率告警
+          - alert: K6HighErrorRate
+            expr: rate(k6_http_req_failed[5m]) > 0.05
+            for: 2m
+            labels:
+              severity: warning
+              service: k6
+            annotations:
+              summary: "k6 测试错误率过高"
+              description: "k6 测试在过去5分钟内的错误率超过5% (当前值: {{ $value }})"
+              
+          # k6 响应时间告警
+          - alert: K6HighResponseTime
+            expr: histogram_quantile(0.95, rate(k6_http_req_duration_seconds_bucket[5m])) > 1
+            for: 2m
+            labels:
+              severity: warning
+              service: k6
+            annotations:
+              summary: "k6 测试响应时间过高"
+              description: "k6 测试的95%分位响应时间超过1秒 (当前值: {{ $value }}秒)"
+              
+          # k6 活动虚拟用户告警
+          - alert: K6HighVUCount
+            expr: k6_vus > 100
+            for: 1m
+            labels:
+              severity: info
+              service: k6
+            annotations:
+              summary: "k6 高并发虚拟用户"
+              description: "k6 测试虚拟用户数超过100 (当前值: {{ $value }})"
