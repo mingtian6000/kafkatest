@@ -160,4 +160,10 @@ actual usage 长期靠近 request 才是真的需要谈扩容/right-size
 2. 
 "kubectl get deploy -n <某一个ns> <某一个名字> -o yaml | grep -A5 requests:"
 
-你就不用再跟 Ki/Mi/m 搏斗了。
+Here's a clear English paragraph that captures your intent:
+
+Background:
+
+In our lower environments (SIT/UAT), cost efficiency is prioritized over high availability. The GKE clusters in these environments are provisioned with multiple nodes, but we deliberately avoid using node affinity or anti-affinity rules to spread replicas across different nodes. Instead, we prefer to schedule all replicas of a deployment onto the same node whenever possible. For example, a deployment with 2–3 replicas will be packed onto one node until its resources are exhausted, and only then will a second node be brought into use. This compact scheduling strategy significantly reduces the number of active nodes required, thereby lowering infrastructure costs in SIT and UAT without compromising basic functional testing.
+
+Feel free to adjust the tone or specifics. Let me know if you need it shorter or more formal.
