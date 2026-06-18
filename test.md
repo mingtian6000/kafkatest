@@ -114,3 +114,120 @@ C. 多 Deployment 同时扩容时：谁先拿到新 Node？
 对：CPU 高 → HPA 加 replica → 没地方放就 Pending → CA 看到 Pending 去扩 node → node Ready 后 Pod 调度成功。
 
 只是要把它做稳，关键是：requests 必须写实、topology 约束用软（你已经选对了）、并且确保 node pool 上限 / quota / taint 不把你悄悄卡死。
+
+你这个问题问得非常细，也正好是很多人第一次看到 multi-container Pod + HPA 时都会“卡住”的点。结论先给你：
+
+HPA 的 CPU 利用率是按「每个 Pod 的「总 CPU usage ÷ 总 CPU request」算出一个 ratio，再对 replicas 做平均」；不是按单个 container 看的。
+所以 sidecar 的 CPU 一定会被算进去，但它是“合进 Pod 总量里一起算”。
+下面把“它怎么算 / 你该怎么配 / 什么情况下会误判”拆开说清楚。
+
+1) HPA 用的那个“80%”到底是谁的 80%
+
+当你用最常见的形式：
+
+metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+HPA 背后拿到的指标大致逻辑是（简化版）：
+
+- 对 每个 Pod i
+   - 
+"podUsage_i = sum(c1.cpu_usage, c2.cpu_usage, c3.cpu_usage)"
+   - 
+"podRequest_i = sum(c1.requests.cpu, c2.requests.cpu, c3.requests.cpu)"
+   - 
+"podRatio_i = podUsage_i / podRequest_i"
+- 然后 HPA 对这批 Pod 的 
+"podRatio_i" 取平均（默认就是普通平均）
+- 用这个 平均 ratio 去跟 
+"averageUtilization=80" 比，决定扩/缩
+
+所以关键点：
+
+Pod 里有几个 container、谁是 main 谁是 sidecar，HPA 并不区分“角色”，它只看“总量/总量”。
+
+2) 套到你说的例子（1 main + 2 sidecar）
+
+你给的例子：
+
+- main:   request=0.1
+- sidecarA:request=0.1
+- sidecarB:request=0.1→ 
+"podRequest = 0.3"
+
+假如在某一个采样窗口：
+
+- main 实际用 0.18
+- sidecarA 用 0.03
+- sidecarB 用 0.02→ 
+"podUsage = 0.23"
+
+那这个 Pod 的瞬时 ratio = 0.23 / 0.3 ≈ 76.6%
+
+如果 Deployment 其它 Pod 也在附近，平均一算就可能触达/超过 80%，HPA 就会尝试加 replica。
+
+⚠️ 但你现在要特别警惕一件事——request 设多大，会直接“放大/缩小”这个百分比。
+
+一个最容易误导人的情况
+
+如果 sidecar 实际上“几乎不吃 CPU”，但你仍给它们各 0.1 request，结果是：
+
+- 分母被人为撑大（0.3），而 usage 主要来自 main
+- 这时 main 的真实压力未必被充分体现（因为 ratio 可能会被“request 注水”压低）
+
+反过来更危险的是：
+
+- 你把 sidecar request 写成 0.1，但 sidecar 偶尔 burst（哪怕只是短暂扫日志/代理突发），usage 一上去，分母又小 → ratio 飙升 → HPA 可能误以为业务负载高了，去扩 replica（其实只是 sidecar 抖了一下）
+
+3) sidecar 的 request 应该怎么写才不“污染”业务 CPU 指标
+
+一个很实用的工程原则：
+
+CPU request = 给调度器看的“最低担保”，不是预算上限。sidecar 的 request 要尽量贴近它“常态会占用的水平”，同时避免把业务容器的 request 稀释掉。
+你可以用这个公式反推你该不该都是 0.1：
+
+1. 先看真实数据（哪怕跑一阵子观察）
+   - main 常态 usage（不看 burst）大概多少？
+   - sidecar 常态 usage 大概多少？（经常是几十 millicore 级别）
+2. 再配 request：
+   - main：按业务容量给（比如 200m～500m 起步都常见）
+   - sidecar：给一个“能稳定跑、又不浪费”的数（比如 50m/100m），别随手给到跟业务一样重
+
+举例（更推荐的样子）：
+
+containers:
+  - name: app
+    requests:
+      cpu: "400m"
+    limits:
+      cpu: "1000m"
+  - name: sidecar-log
+    requests:
+      cpu: "50m"
+    limits:
+      cpu: "150m"
+  - name: sidecar-proxy
+    requests:
+      cpu: "50m"
+    limits:
+      cpu: "150m"
+
+这样 
+"podRequest=500m"，usage 里：
+
+- main 的波动主导 ratio（你想要的）
+- sidecar 有点贡献，但不会被过分放大/缩小
+
+4) 一句话回答“合起来算还是单看”
+
+- 是合起来算（Pod 总量 / Pod 总 request）
+- 所以它“都会使用 CPU，都会被算”——但它是作为 Pod 整体的一部分被算，不是单独看 main 容器那个 usage 满 80% 就触发。
+
+如果你愿意，把你现在 Pod 里三个容器的 
+"requests/limits" 和实际监控里大概的 CPU usage（main vs sidecar）贴出来，我可以帮你把 
+"averageUtilization" 设成 80 是否合适、以及 sidecar request 是否需要往下/往上收，给个更贴合你流量的数值区间。
