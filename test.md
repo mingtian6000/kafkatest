@@ -1,68 +1,75 @@
 ```
-这是个非常好的观察，根子在于 GKE Cluster Autoscaler 对 Spot node pool 用了不同的 zone 分配策略。
 
-核心原因：
-"location_policy" 默认值不一样
+啊明白，你是 
+"photon:5.0" 这个 Docker image，不是装 VM 的那个 Photon OS ——前面我按"虚拟机 OS"路子答偏了，切回来。
 
-GKE 从 1.24.1-gke.800 开始，给 Cluster Autoscaler 引入了一个叫 
-"location_policy"（位置策略）的参数，而它的默认值在 Spot 和标准节点池上是不一样的：
+photon:5.0 作为 Docker image 是个啥
 
-Node Pool 类型 默认 
-"location_policy" 行为
-Standard（非抢占式） 
-"BALANCED" 尽量把节点均匀铺在 A / B / C，兼顾各 zone 容量和 Pod 的 zone affinity
-Spot / Preemptible 
-"ANY" 不保证均匀，autoscaler 会优先往当前有剩余容量/库存充裕的那个 zone塞节点
+"vmware/photon"（Docker Hub 官方库）的定位就是极简 Linux base image，给 Dockerfile 的 
+"FROM" 用的，类比 
+"alpine" / 
+"distroless" / 
+"ubi"，但它是 RPM 系（tdnf）。5.0 这个 tag 背后：
 
-所以你看到的"Spot 节点全挤在一个 zone 里"，不是 bug，而是 
-"ANY" 策略的设计行为。
+- 基础是 Photon OS 5.0（内核 6.1 系，但容器里看不到宿主机内核，image 里只带 userspace）
+- 包管理 
+"tdnf"，兼容 yum 语法
+- 体积 ~10M+（Docker Hub 显示 10M+ 那档）
+- 支持 
+"amd64" + 
+"arm64v8"
 
-为什么 Spot 的默认是 
-"ANY" 而不是 
-"BALANCED"？
+"support 版本"在 Docker image 语境下要看三层
 
-两个硬核原因：
+容器版的 Photon 跟 VM 版不太一样——它没有"装好就不动"的 ISO，而是滚动维护的 tag，所以"support"得拆开看：
 
-1. Spot 库存（capacity）在各 zone 是不均匀的
+① 大版本 5.0 的 lifecycle（跟前面答的 VM 版一致）
 
-Spot VM 本质上就是 Google 把闲置容量拿出来低价卖，各 zone 的剩余库存实时波动很大。某个时刻可能 zone-b 有一大把 e2-standard-4 闲着，zone-c 已经没库存了。Autoscaler 如果强行走 
-"BALANCED"，就会在 zone-c 反复尝试创建 → 失败 → 重试，反而拖慢调度。
-"ANY" 的做法是：哪有货就在哪扩，先把 Pod 跑起来。
+5.0 目前 EOL 日期未公布，还在活跃维护期。Docker Hub 上 3.0 的 tag 还挂着但 OS 本身已 EOL（2025-10-02），4.0 支持到 2027-10-11，5.0 的 EOL 估计会跟着下一个大版本发布才定。
 
-2. Spot 本身就是"可中断"的，跨 zone 均匀分布的 HA 语义不一样
+② image 本身的维护 tag（重点）
 
-Standard 节点你期望"zone 故障不影响服务"，所以要均匀铺。Spot 节点本身随时可能被抢占（preempt），节点消失是正常预期，所以 autoscaler 的首要目标是"尽快找到能提供的容量"，而不是"美学上的均匀"。
+Docker Hub 
+"photon" 页的 supported tags 是这样的结构 ：
 
-结果就是：一旦 zone-b 有稳定库存，一连串 scale-up 事件都落在 zone-b，zone-a/c 就空着——看起来就像"全挤一块了"。
+5.0 , 5.0-20260116 , latest
+4.0 , 4.0-20260201
+3.0 , 3.0-20250316
 
-怎么让它均匀铺开？
+"5.0" 是个浮动 tag，背后实际指向一个带日期的快照（比如 
+"5.0-20260116"），VMware 每次修 CVE / 升组件就 re-push 一个新日期子 tag，
+"5.0" 跟着漂。
+"5.0-20250920" 这种是当时某次 CVE roll 的快照 。
 
-如果你确实需要 Spot 节点跨 zone 分布（比如你的无状态 batch 虽然能用 Spot，但你还是希望 zone 故障时不会全军覆没），可以手动把 policy 改成 
-"BALANCED"：
+👉 所以"我在哪看 support"对你这个 image 来说，实操是：
 
-gcloud container node-pools update YOUR_POOL_NAME \
-  --cluster=YOUR_CLUSTER \
-  --location=YOUR_REGION \
-  --location-policy=BALANCED
+- Docker Hub photon 页 → 看 supported tags 列表，确认 
+"5.0" 当前漂到哪个日期快照：https://hub.docker.com/_/photon
+- GitHub vmware/photon-docker-image → 看 issues + 每次更新的 Dockerfile 变更：https://github.com/vmware/photon-docker-image
+- VMware/Broadcom Photon OS Release Notes → 搜 "Photon OS 5.0 Update XXX"，会列这次滚了哪些 CVE、Docker 版本从多少升到多少（比如之前 5.0 里 Docker 24.0.9 有 CVE-2024-41110，后面提交里升掉了 ）
 
-或者在创建 node pool 时就指定：
+③ 商业 support 的坑
 
-gcloud container node-pools create spot-pool \
-  --cluster=YOUR_CLUSTER \
-  --location=YOUR_REGION \
-  --spot \
-  --location-policy=BALANCED \
-  --node-locations=us-central1-a,us-central1-b,us-central1-c \
-  --enable-autoscaling --min-nodes=0 --max-nodes=20
+Docker Hub 官方页自己写了一句 ：
 
-⚠️ 但要注意：
-"BALANCED" + Spot 的代价是某些 zone 库存不足时，对应的节点可能扩不出来，部分 Pod 会 Pending 更久。
+Photon OS is released as open source software and comes with no commercial support.
+意思是：你拉 
+"photon:5.0" 这 image，VMware/Broadcom 默认不给你 commercial support。要商业支持得走签合同的路子——比如你是 Tanzu / vSphere 客户，Photon 作为底层组件在那些产品里是受支持的；但单独拿 
+"photon:5.0" 当 base image 跑自己的 app，那就是社区 best-effort，出问题 GitHub 提 issue。
 
-一句话总结
+自查你手上这个 image 的版本
 
-Standard 默认 
-"BALANCED" → 均匀跨 A/B/C；Spot 默认 
-"ANY" → 追着有货的 zone 扩 → 看起来全堆一个 zone。 这是 GKE autoscaler 的有意设计，不是配置错误。想要均匀就手动切 
-"--location-policy=BALANCED"，但要接受 Spot 库存不均带来的扩缩延迟风险。
-如果你的场景是纯 batch / CI runner，其实全在一个 zone 也问题不大；但如果是面向用户的无状态服务混用 Spot，建议还是 
-"BALANCED" + 一个小的标准 node pool 兜底。
+docker run --rm photon:5.0 cat /etc/os-release
+# 看 VERSION_ID=5.0 和 BUILD_ID（那个日期就是对应 5.0-YYYYMMDD 的快照）
+
+docker run --rm photon:5.0 tdnf info docker
+# 看当前 image 里 Docker 组件版本，对照 CVE 情况
+
+"BUILD_ID" 那个日期跟 Docker Hub 上 
+"5.0-YYYYMMDD" 能对上，就能反查这次滚修了啥。
+
+所以总结你这场景："去哪看 support"→ Docker Hub photon 页看 tag 漂移 + GitHub photon-docker-image 看变更 + Broadcom Photon OS release notes 看 CVE 清单；"5.0 还在不在 support"→ 大版本还在活跃，但 image 是滚动的，得看你 
+"docker pull" 抓的是哪个日期快照。
+
+你是拿 
+"photon:5.0" 当自己 app 的 base image，还是某个 VMware 产品（Tanzu 之类）里打包好的 layer？前者要留意"无商业 support"那条，后者不用管，随产品走。
