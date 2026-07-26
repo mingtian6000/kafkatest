@@ -1,57 +1,157 @@
 ```
-你说的 "steering" 在 Agent 语境里，就是用户在 Agent 执行任务的中途，注入新的指令或补充信息，让 Agent "转向"去调整当前工作的行为。你理解的方向是对的——它确实会把之前的 context 和你现在补充的信息结合起来，但具体怎么结合，要看 Agent 的实现和你补充的时机。
+好的，Agent Hooks 是目前 Copilot 提供的最硬的控制层——它是在 Agent 执行生命周期中插入自定义脚本的机制，具有确定性执行的特点，不像 instruction 那样只是"软引导"。下面我手把手教你怎么配置和使用，针对你的场景（阻止 Agent 写入 MCP JSON 文件）。
 
-Steering 到底发生了什么
+一、Agent Hooks 是什么
 
-当你看到 Agent 显示 "steering" 时，底层通常发生了这几件事：
+Agent Hooks 允许你在 Agent 的关键决策点（如即将执行工具前、工具执行后、对话结束时）运行自定义脚本，脚本可以根据返回值决定是否允许该操作继续。支持的 hook 点：
 
-1. 你的补充被注入到当前上下文：Agent 的执行循环（一般是 
-"plan → act → observe → repeat"）在下一个决策点会读到你的新指令
-2. Plan 会被重新评估：大多数成熟的 Agent 实现（包括 Copilot Agent Mode）不会无视已制定的 plan，而是会把新信息与现有 plan 做对齐——
-   - 如果补充是细节修正（"第 3 步记得处理 null 情况"）→ Agent 会在执行到那一步时纳入
-   - 如果补充是方向性调整（"别用 REST 了，改用 GraphQL"）→ Agent 会重写 plan，可能从 5 步变成 7 步，或调整顺序
-3. Context 是累积的：之前的所有步骤、工具调用结果、你的原始请求，加上这次 steering 输入，都会留在上下文窗口里一起参与后续推理
+Hook 名称 触发时机 返回值影响
 
-关键：Steering 不等于"重头开始"
+"PreToolUse" Agent 将要调用某个工具前 返回 
+"true" 允许继续，
+"false" 拒绝该次工具调用
 
-这是很多人误解的地方。Agent 不会丢掉已有的 plan 和进度，而是：
+"PostToolUse" 工具调用完成后 可用于记录日志或执行后处理
 
-原始 Plan: [Step 1 ✓] [Step 2 ✓] [Step 3 → 执行中...]
-                    ↑ 你在这里 steering："Step 3 还要考虑 X 情况"
-                    
-实际行为（多数实现）：
-- 已完成 Step 1、2 的结果保留在 context 中
-- Step 3 执行时会把你的补充 X 纳入
-- Step 4、5 可能被微调，但不会推翻重做
-- 如果补充太大，Agent 可能插入 Step 3.1、3.2
+"OnSessionEnd" 会话结束时 清理资源等
 
-但也有例外：如果你的补充是颠覆性的（"换个完全不同的实现方案"），Agent 可能会标记原 plan 作废，重新 planning。这时候你会看到它又走了一遍 plan 阶段。
+对于你的需求，最合适的是 
+"PreToolUse" ——在 Agent 即将执行文件写入操作时，检查目标路径是否为 MCP JSON 文件，若是则拒绝。
 
-不同产品的 steering 行为差异
+二、配置 Agent Hooks 的方法
 
-产品 Steering 时机 Plan 处理
-GitHub Copilot Agent Mode 任何时候输入都算 steering 动态更新 plan，已完成步骤保留
-Cursor Agent 类似，支持中途打断 plan 模式开启时会重新规划
-Cline / Claude Code 每一步都会读最新 human input 灵活重写 plan
+前提条件
 
-给你的实操建议
+- 你需要 Copilot Business 或 Enterprise 订阅（个人版不支持）
+- 当前 Copilot Agent Hooks 仍处于预览阶段，可能需要手动启用
+- 支持的 IDE：VS Code 1.96+、Cursor、JetBrains（部分版本）
 
-既然你在用 Copilot Agent Mode，记住这几个点：
+配置方式有两种
 
-1. 补充越具体越好：与其说"你漏了错误处理"，不如说"在 Step 3 的 API 调用后要 catch 429 错误并重试"。前者 Agent 要猜，后者直接可执行
-2. Steering 发生在下一个决策点：如果你补充时 Agent 正在执行某个工具调用（比如正在跑测试），它会等当前动作完成后，在下一步规划时纳入你的输入——所以不是"瞬间生效"，而是"下一次循环生效"
-3. Plan 视图会更新：你补充后，留意左侧/面板的 plan 列表，应该会看到变化（新增步骤、修改步骤描述、或重新编号）
-4. Context 不会丢：你之前所有的对话、Agent 已经做的工具调用结果，都还在上下文里。所以 steering 是增量的，不是替换的
+方式 A：通过 VS Code 设置（推荐，适用于个人/项目级别）
 
-一个形象的比喻
+在 VS Code 的 
+"settings.json" 中添加：
 
-把 Agent 想象成一个程序员在结对编程：
+{
+  "github.copilot.chat.agent.hooks": {
+    "preToolUse": "/path/to/your/hook-script.sh"
+  }
+}
 
-- 你们先一起写了个 5 步实施方案（plan）
-- 他做到第 3 步时，你突然想起来："哦对了，还要考虑并发情况"
-- 他不会说"那我们重头开始吧"，而是说"OK，我在第 3 步里加上并发处理，第 4 步的测试也要相应调整"——这就是 steering
-- 他已经写完的第 1、2 步代码保留，第 3 步改写，第 4、5 步微调
+注意：路径可以是绝对路径，也可以是相对于项目根目录的相对路径（如 
+".github/hooks/pre-tool-use.sh"）。
+方式 B：通过项目级配置文件（适合团队共享）
 
-所以你的理解完全正确：之前的 context + 现在的 steering 信息 = 合并后继续推进。这也是为什么 Agent 模式比普通的 Chat 模式更适合复杂多步任务——它允许人类在自动化执行过程中持续引导，而不是一次性把需求说完美。
+在项目根目录创建 
+".github/copilot-hooks.yml"：
 
-💡 一个进阶技巧：如果你预感到某个任务中途需要 steering，可以在初始 prompt 里就告诉 Agent："执行过程中如果遇到 X 情况，按 Y 处理；遇到 Z 情况，停下来问我。"这样能减少中途打断的次数，让 Agent 更自主地跑完。
+version: 1
+hooks:
+  preToolUse:
+    - command: bash
+      args: [".github/hooks/pre-tool-use.sh"]
+
+三、编写 Hook 脚本：拦截 MCP JSON 写入
+
+下面是一个 Bash 脚本示例，它会在 Agent 每次调用工具前检查：如果工具是 
+"writeFile" 或 
+"editFile"，且目标文件匹配 MCP JSON 模式，则拒绝。
+
+#!/bin/bash
+# pre-tool-use.sh - 拒绝 Agent 写入 MCP JSON 配置文件
+
+# 从环境变量中获取本次工具调用的详细信息
+# Copilot 会注入以下环境变量：
+#   COPILOT_TOOL_NAME: 工具名称（如 writeFile, editFile, searchFile 等）
+#   COPILOT_TOOL_INPUT: 工具参数的 JSON 字符串（包含文件路径等）
+#   COPILOT_SESSION_ID: 当前会话 ID
+
+TOOL_NAME="${COPILOT_TOOL_NAME}"
+TOOL_INPUT="${COPILOT_TOOL_INPUT}"
+
+# 只拦截文件写入类工具
+if [[ "$TOOL_NAME" == "writeFile" || "$TOOL_NAME" == "editFile" ]]; then
+    # 提取文件路径（假设 TOOL_INPUT 是 JSON，可以用 jq 解析，但为了兼容性，用 grep 简单匹配）
+    FILE_PATH=$(echo "$TOOL_INPUT" | grep -o '"filePath":"[^"]*"' | cut -d'"' -f4)
+    
+    # 检查是否匹配 MCP JSON 模式
+    if echo "$FILE_PATH" | grep -qiE '(mcp\.json|\.vscode/mcp\.json|\.mcp\.json|mcp-config\.json)'; then
+        echo "BLOCKED: Agent attempted to write to MCP configuration file ($FILE_PATH)"
+        exit 1   # 非零退出表示拒绝该工具调用
+    fi
+fi
+
+# 其他情况允许继续
+exit 0
+
+脚本放置位置
+
+将上述脚本保存为 
+".github/hooks/pre-tool-use.sh"，并赋予执行权限：
+
+chmod +x .github/hooks/pre-tool-use.sh
+
+如果不想用 Bash，也可以用 Python
+
+#!/usr/bin/env python3
+import os, json, sys
+
+tool_name = os.environ.get("COPILOT_TOOL_NAME", "")
+tool_input_str = os.environ.get("COPILOT_TOOL_INPUT", "")
+
+if tool_name in ("writeFile", "editFile"):
+    try:
+        params = json.loads(tool_input_str)
+        file_path = params.get("filePath", "")
+        # 检查是否匹配 MCP JSON 模式
+        if any(pattern in file_path.lower() for pattern in ["mcp.json", ".mcp.json", "mcp-config.json"]):
+            print(f"BLOCKED: Attempted to write MCP config: {file_path}")
+            sys.exit(1)
+    except:
+        pass
+
+sys.exit(0)
+
+四、验证 Hook 是否生效
+
+1. 在 VS Code 中打开一个项目，确保 Copilot 已连接
+2. 打开 Copilot Chat，切换到 Agent 模式
+3. 向 Agent 提问："帮我创建一个 MCP 服务器配置文件"
+4. 观察：Agent 可能会尝试写入 
+".vscode/mcp.json"，此时 Hook 脚本会被触发，Agent 会收到错误，并在聊天窗口中显示类似以下信息：
+⛔ Tool call rejected by pre-tool-use hook: writeFile on .vscode/mcp.json
+5. 同时，VS Code 的输出面板（
+"View → Output"，选择 "Copilot Agent Hooks"）会看到详细的日志
+
+五、重要注意事项
+
+1. Hook 脚本的权限：必须要有可执行权限（
+"chmod +x"），否则 VS Code 会静默忽略
+2. 环境变量：Copilot 注入的环境变量名称可能随版本变化，建议查看官方文档或输出面板的日志来确认实际变量名
+3. 性能影响：Hook 脚本每次工具调用都会执行，尽量保持轻量（避免网络请求或复杂计算）
+4. 仅阻止 Agent 自身的操作：用户手动创建文件、其他扩展写入的文件不受 Hook 控制
+5. 跨平台兼容：Bash 脚本在 Windows 上需要 Git Bash 环境；如果团队有 Windows 用户，建议用 Python 或 Node.js 脚本
+6. Hook 不是安全边界：恶意用户仍然可以绕过（比如直接修改 hook 脚本），但它能有效阻止 Agent 的意外行为
+
+六、如果你还想更进一步：组合 instruction + hook
+
+最佳实践是双层防护：
+
+- Instruction 文件：告诉模型"不要写 MCP JSON"，减少它主动尝试的概率
+- Agent Hooks：作为兜底，即使模型尝试了也会被物理拦截
+
+这样既减少了 Agent 做无用功（浪费 token），又保证了策略强制执行。
+
+七、如果 Hook 不生效怎么办？
+
+- 检查 VS Code 版本是否 ≥ 1.96
+- 检查 Copilot 订阅类型（Business/Enterprise）
+- 在 VS Code 设置中搜索 
+"github.copilot.chat.agent.hooks.enabled"，确保为 
+"true"
+- 查看输出面板（
+"Copilot Agent Hooks"）是否有错误信息
+- 尝试重启 VS Code
+
+如果还是不行，可能你的 Copilot 版本尚未支持 Agent Hooks（仍在灰度中），此时可以暂时用 instruction + 组织策略的组合，等待功能全面开放。
