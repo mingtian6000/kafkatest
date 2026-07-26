@@ -1,191 +1,57 @@
 ```
-两边都要导，那就得 VS Code + IntelliJ 各走各的捞法，然后在中间层合并。给你一套能跑通的双端归集方案，从"手动最快"到"自动化"三档。
+你说的 "steering" 在 Agent 语境里，就是用户在 Agent 执行任务的中途，注入新的指令或补充信息，让 Agent "转向"去调整当前工作的行为。你理解的方向是对的——它确实会把之前的 context 和你现在补充的信息结合起来，但具体怎么结合，要看 Agent 的实现和你补充的时机。
 
-一、先对齐两边的存储位置（这是双 IDE 的关键）
+Steering 到底发生了什么
 
-VS Code 侧（复习一下）
+当你看到 Agent 显示 "steering" 时，底层通常发生了这几件事：
 
-- 工作区会话：
-"~/Library/Application Support/Code/User/workspaceStorage/<hash>/github.copilot-chat/chatSessions/"
-- 空窗口全局会话：
-"~/Library/Application Support/Code/User/globalStorage/github.copilot-chat/emptyWindowChatSessions/"
-- 格式：JSONL（首行是 session 快照，后续是 incremental patch，结构略绕）
+1. 你的补充被注入到当前上下文：Agent 的执行循环（一般是 
+"plan → act → observe → repeat"）在下一个决策点会读到你的新指令
+2. Plan 会被重新评估：大多数成熟的 Agent 实现（包括 Copilot Agent Mode）不会无视已制定的 plan，而是会把新信息与现有 plan 做对齐——
+   - 如果补充是细节修正（"第 3 步记得处理 null 情况"）→ Agent 会在执行到那一步时纳入
+   - 如果补充是方向性调整（"别用 REST 了，改用 GraphQL"）→ Agent 会重写 plan，可能从 5 步变成 7 步，或调整顺序
+3. Context 是累积的：之前的所有步骤、工具调用结果、你的原始请求，加上这次 steering 输入，都会留在上下文窗口里一起参与后续推理
 
-IntelliJ / PyCharm / GoLand 等 JetBrains 侧
+关键：Steering 不等于"重头开始"
 
-JetBrains 的 Copilot 插件存储位置按 OS 分：
+这是很多人误解的地方。Agent 不会丢掉已有的 plan 和进度，而是：
 
-OS 路径
-macOS 
-"~/Library/Application Support/JetBrains/<IDE_NAME>/github.copilot-chat/"
-Linux 
-"~/.config/JetBrains/<IDE_NAME>/github.copilot-chat/"
-Windows `%APPDATA%\JetBrains<IDE_NAME>\github.copilot-chat`
+原始 Plan: [Step 1 ✓] [Step 2 ✓] [Step 3 → 执行中...]
+                    ↑ 你在这里 steering："Step 3 还要考虑 X 情况"
+                    
+实际行为（多数实现）：
+- 已完成 Step 1、2 的结果保留在 context 中
+- Step 3 执行时会把你的补充 X 纳入
+- Step 4、5 可能被微调，但不会推翻重做
+- 如果补充太大，Agent 可能插入 Step 3.1、3.2
 
-"<IDE_NAME>" 比如 
-"IntelliJIdea2024.2"、
-"PyCharm2024.2"、
-"GoLand2024.2"——Toolbox 装的话会有好几个并存，都得扫。
+但也有例外：如果你的补充是颠覆性的（"换个完全不同的实现方案"），Agent 可能会标记原 plan 作废，重新 planning。这时候你会看到它又走了一遍 plan 阶段。
 
-JetBrains 这边没有像 VS Code 那样的"Export All Workspaces"社区插件（至少目前没看到成熟的），所以走两条路二选一：
+不同产品的 steering 行为差异
 
-- 单会话导出：Copilot Chat 面板右上角 
-"⋯" → Export，一次一个，复盘场景不推荐
-- 硬扫本地 JSONL：跟 VS Code 类似，但 JetBrains 的结构更扁平一些，下面给脚本
+产品 Steering 时机 Plan 处理
+GitHub Copilot Agent Mode 任何时候输入都算 steering 动态更新 plan，已完成步骤保留
+Cursor Agent 类似，支持中途打断 plan 模式开启时会重新规划
+Cline / Claude Code 每一步都会读最新 human input 灵活重写 plan
 
-二、双端归集的三种方案
+给你的实操建议
 
-方案 A：VS Code 插件 + IntelliJ 手动导（最快上手，5 分钟）
+既然你在用 Copilot Agent Mode，记住这几个点：
 
-- VS Code：装 
-"Copilot Session Export" 或 
-"Copilot Chat to Markdown" → 
-"Export: All Workspaces" → 一份 MD
-- IntelliJ：每个重要会话右上角 
-"⋯" → Export → 存 MD，或者一次性把 
-"github.copilot-chat/" 整个目录 cp 出来当备份
-- 两份 MD 手动拼一起，喂 LLM 出周报
+1. 补充越具体越好：与其说"你漏了错误处理"，不如说"在 Step 3 的 API 调用后要 catch 429 错误并重试"。前者 Agent 要猜，后者直接可执行
+2. Steering 发生在下一个决策点：如果你补充时 Agent 正在执行某个工具调用（比如正在跑测试），它会等当前动作完成后，在下一步规划时纳入你的输入——所以不是"瞬间生效"，而是"下一次循环生效"
+3. Plan 视图会更新：你补充后，留意左侧/面板的 plan 列表，应该会看到变化（新增步骤、修改步骤描述、或重新编号）
+4. Context 不会丢：你之前所有的对话、Agent 已经做的工具调用结果，都还在上下文里。所以 steering 是增量的，不是替换的
 
-适合：刚开始试，会话量不大（每周 <20 个），不想写脚本。
+一个形象的比喻
 
-方案 B：双端扫 JSONL + 统一脚本（推荐，半自动化）
+把 Agent 想象成一个程序员在结对编程：
 
-写个小脚本（Python 或 bash）每周跑一次，扫两份路径，滤近 7 天，合并输出一份 MD。
+- 你们先一起写了个 5 步实施方案（plan）
+- 他做到第 3 步时，你突然想起来："哦对了，还要考虑并发情况"
+- 他不会说"那我们重头开始吧"，而是说"OK，我在第 3 步里加上并发处理，第 4 步的测试也要相应调整"——这就是 steering
+- 他已经写完的第 1、2 步代码保留，第 3 步改写，第 4、5 步微调
 
-bash 最小版（macOS 为例，Linux 换路径即可）：
+所以你的理解完全正确：之前的 context + 现在的 steering 信息 = 合并后继续推进。这也是为什么 Agent 模式比普通的 Chat 模式更适合复杂多步任务——它允许人类在自动化执行过程中持续引导，而不是一次性把需求说完美。
 
-#!/bin/bash
-# copilot-weekly.sh — 归集 VS Code + IntelliJ 近7天 Copilot 对话
-
-WEEK_DIR="$HOME/copilot-weekly/$(date +%Y-W%V)"
-mkdir -p "$WEEK_DIR"
-
-# --- VS Code 侧 ---
-VSCODE_ROOT="$HOME/Library/Application Support/Code/User"
-find "$VSCODE_ROOT/workspaceStorage" -path "*/github.copilot-chat/chatSessions/*.jsonl" -mtime -7 2>/dev/null \
-  | while read f; do
-      echo "=== [VSCode] $f ==="
-      # 简单抽 user prompt（首行 snapshot 里有 prompt 字段，patch 行也有）
-      jq -r 'select(.prompt?) | .prompt' "$f" 2>/dev/null | head -1
-      echo
-    done > "$WEEK_DIR/vscode-prompts.txt"
-
-# --- JetBrains 侧（扫所有 IDE 版本）---
-JB_ROOT="$HOME/Library/Application Support/JetBrains"
-find "$JB_ROOT" -path "*/github.copilot-chat/*" -name "*.jsonl" -mtime -7 2>/dev/null \
-  | while read f; do
-      echo "=== [JB] $f ==="
-      jq -r 'select(.prompt?) | .prompt' "$f" 2>/dev/null | head -1
-      echo
-    done > "$WEEK_DIR/jb-prompts.txt"
-
-# --- 合并喂 LLM ---
-cat "$WEEK_DIR"/vscode-prompts.txt "$WEEK_DIR"/jb-prompts.txt > "$WEEK_DIR/all-prompts.txt"
-echo "✅ 归集完成: $WEEK_DIR/all-prompts.txt"
-
-跑完 
-"all-prompts.txt" 就是本周你两边所有会话的首 prompt 清单，贴给元宝/Claude/DeepSeek 出周报。
-
-⚠️ 两个坑：
-- VS Code 的 JSONL 首行是 session snapshot（含 
-"prompt"、
-"history"、
-"model" 等），后续行是 UI patch（结构不一样），简单 
-"jq" 抽 
-".prompt" 只首行有，patch 行得另 parse。复盘场景其实首行就够了（首 prompt = 会话主题），所以 
-"head -1" 没问题。
-- JetBrains 的 Copilot 插件版本不同，目录名可能是 
-"github.copilot-chat" 也可能是 
-"github.copilot"（旧版），
-"find" 里把 pattern 放宽点：
-"*copilot*"。
-方案 C：进阶——双端 + 自动摘要 + 周报（长期用）
-
-在方案 B 基础上加两步：
-
-1. 给每个 session 自动起标题：用首 prompt 调 LLM API（DeepSeek / GLM / OpenAI）让模型回一句"10 字内标题 + 领域标签"，比 
-"session-1.jsonl" 这种文件名好认
-2. 去重：同一问题你在 VS Code 问一次、IntelliJ 又问一次，用 embedding 相似度或简单 dedup 合并
-3. 出周报 MD：复用上轮给的 prompt 模板
-
-Python 骨架（核心逻辑）：
-
-from pathlib import Path
-import json, os
-from datetime import datetime, timedelta
-
-def collect_copilot(days=7):
-    cutoff = datetime.now() - timedelta(days=days)
-    sessions = []
-
-    # VS Code
-    vscode_root = Path.home() / "Library/Application Support/Code/User"
-    for p in vscode_root.rglob("github.copilot-chat/chatSessions/*.jsonl"):
-        if p.stat().st_mtime < cutoff.timestamp(): continue
-        data = json.loads(p.read_text().splitlines()[0])  # 首行 snapshot
-        sessions.append({
-            "ide": "vscode",
-            "file": str(p),
-            "prompt": data.get("prompt", ""),
-            "model": data.get("model", ""),
-            "time": datetime.fromtimestamp(p.stat().st_mtime)
-        })
-
-    # JetBrains
-    jb_root = Path.home() / "Library/Application Support/JetBrains"
-    for p in jb_root.rglob("*copilot*/**/*.jsonl"):
-        if p.stat().st_mtime < cutoff.timestamp(): continue
-        try:
-            data = json.loads(p.read_text().splitlines()[0])
-            sessions.append({"ide": "jb", "file": str(p),
-                             "prompt": data.get("prompt",""), "model": data.get("model",""),
-                             "time": datetime.fromtimestamp(p.stat().st_mtime)})
-        except: pass
-    return sessions
-
-if __name__ == "__main__":
-    s = collect_copilot(7)
-    print(f"近7天共 {len(s)} 个会话（VSCode {sum(1 for x in s if x['ide']=='vscode')} / JB {sum(1 for x in s if x['ide']=='jb')}）")
-    # 下一步：调 LLM 出周报
-
-跑出来长这样：
-
-近7天共 23 个会话（VSCode 15 / JB 8）
-
-然后把 
-"s" 序列化喂给 LLM，prompt 用上轮那个模板就行。
-
-三、双 IDE 场景的几个实战提醒
-
-1. Toolbox 装的多 IDE 版本：
-"~/Library/Application Support/JetBrains/" 下会有 
-"IntelliJIdea2024.1"、
-"IntelliJIdea2024.2"、
-"PyCharm2024.2" 并存，脚本里 
-"rglob("*copilot*")" 全扫就对了，别硬编码版本号。
-
-2. 远程开发场景：如果你 VS Code Remote-SSH / JetBrains Gateway 连服务器写代码，会话存在远端，不在本机这个路径。这时候要去远端 
-"~/.config/Code/..." 或 
-"~/.config/JetBrains/..." 捞，或者 Remote-SSH 里 
-"Ctrl+Shift+P" → 
-"Chat: Export" 拉到本地。
-
-3. 工作区 hash 对不上项目名：VS Code 的 
-"workspaceStorage/<hash>/workspace.json" 里有 
-"folder" 字段指向项目绝对路径，想知道这个 hash 对应哪个项目可以：
-
-for d in ~/Library/Application\ Support/Code/User/workspaceStorage/*/; do
-  [ -f "$d/workspace.json" ] && jq -r '"\(.folder // ._generatedWorkspaceMetadata?.entrypoint?) "' "$d/workspace.json"
-done
-
-复盘时知道"这个 session 属于 A 项目还是 B 项目"很有用。
-
-4. 公司机器隐私：如果代码/对话涉及公司敏感信息，LLM 摘要那步务必用本地模型（Ollama + Qwen2.5 7B / DeepSeek-R1 蒸馏版），别走云端 API。
-
-四、给你的推荐节奏
-
-- 本周先试方案 A：VS Code 装 
-"Copilot Session Export" 一键 All Workspaces 出 MD，IntelliJ 侧手动 Export 几个重点会话，拼一起出第一份周报，感受下价值
-- 下周升级方案 B：bash 脚本扫双端，cron 每周五跑，出 
-"all-prompts.txt"
-- 一个月后方案 C：加 LLM 自动标题 + 去重 + 周报 MD，长期积累
+💡 一个进阶技巧：如果你预感到某个任务中途需要 steering，可以在初始 prompt 里就告诉 Agent："执行过程中如果遇到 X 情况，按 Y 处理；遇到 Z 情况，停下来问我。"这样能减少中途打断的次数，让 Agent 更自主地跑完。
