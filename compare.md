@@ -17,3 +17,17 @@ export AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST='[
     }
   }
 ]'
+
+[dag_processor]
+dag_bundle_config_list = [
+    {
+        "name": "github-dags",
+        "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+        "kwargs": {
+            "git_conn_id": "git_github",
+            "tracking_ref": "main",
+            "subdir": "dags",
+            "refresh_interval": 60
+        }
+    }
+]
