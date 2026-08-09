@@ -31,3 +31,5 @@ dag_bundle_config_list = [
         }
     }
 ]
+[core]
+auth_manager = airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
