@@ -1,131 +1,108 @@
 ```
-Kiro 本身没有一个开箱即用的"trigger Jenkins → 看 log → 改代码 → 自动重试"黑盒开关，但你要的这种 agent loop + 超时重试 + 读失败 log 自我迭代 完全可以用 Kiro 现有的几层机制拼出来。关键是分清：哪一层做"循环"，哪一层做"触发"，哪一层做"读 log 修代码"。
+你说的就是 Apache Airflow 2.x → 3.x 的 breaking change，这块官方升级指南和 3.0 release notes 已经写得比较明确。下面按“升级前最容易踩坑”的层级给你梳理，主要覆盖 3.0，也顺带提了 3.1/3.2 里继续收紧的点。
 
-Kiro 原生有什么、没有什么
+前置条件先卡住
 
-有的：
+- 升级起点必须是 Airflow ≥ 2.7，官方建议先升到最新的 2.x，把 deprecation warning 清完再跳 3.x。
+- Python 只支持 3.9–3.12（3.1+ 又去掉了 3.9）。
+- 官方给的两个扫描工具一定要跑：
+   - 
+"ruff check dags/ --select AIR301,AIR302 --preview"（AIR30x 系列抓 DAG 层 breaking change）
+   - 
+"airflow config update" / 
+"airflow config lint"（扫配置项）
 
-- Agent Loop 本体：Kiro 在 Autopilot / Spec 执行模式下，本来就是"规划→调工具→看结果→继续"的循环，不是一次性回答。
-- Hooks（事件触发）：
-"PostToolUse" / 
-"PostTaskExec" / 
-"PreTaskExec" 能在工具或 spec 任务跑完时触发 shell 或 agent prompt，每个 hook 自带 
-"timeout"（秒）。
-- Shell action 退出码：command 类型 hook 退出非 0，Kiro 会把 stderr 喂回 LLM；
-"PreToolUse" 退出 2 可阻断。
-- MCP / Powers：可以接 Jenkins MCP 或自己写脚本调 Jenkins REST API（
-"/job/.../lastBuild/logText/progressiveText"）。
-- Subagents / Delegate：可以把"分析 Jenkins log"丢给子 agent 在后台跑。
+最影响存量代码的：架构级变化
 
-没有的（重要）：
+Airflow 3 引入 AIP-72（Task Execution API + Task SDK）：
 
-- 没有内建的"retry N 次带退避"原语（不像 Jenkins 的 
-"retry(3)"）。
-- Hook 本身不是循环体，它是"事件→一次动作"。要不要再试一次，得由主 agent 的 loop 决定，或者你在 shell 脚本里自己写 
-"for i in 1..N"。
-- Hook 里 
-"type: agent" 只是往上下文塞一段 prompt，不会自己开一个新循环。
+- Worker / task / DAG processor / triggerer 不再直连 metadata database，统一走新的 API Server。
+- 你如果在自定义 Operator、Sensor、trigger 里写过 
+"provide_session"、
+"create_session"、
+"session.query(...)"、直接 import 
+"airflow.models.*" 去查库——3.x 会直接报错，要改成走 REST API / Task SDK / 
+"airflow.sdk"。
+- 这对“老项目里偷偷拿 session 查别的 dag_run / xcom / variable”的写法杀伤最大，基本是第一批要改的东西。
 
-所以"Pipeline fail → 读 log → 改代码 → 重跑"这个闭环，正确拼法是：主 agent（或 spec task）持有循环，Hook 做触发和反馈，shell 脚本做轮询/超时，Skill 封装修复经验。
+DAG 编写层的 breaking change
 
-推荐架构：三层拼一个自愈 loop
+- 
+"DAG(..., schedule_interval=...)" / 
+"timetable=" 被移除，统一用 
+"schedule="；
+"DAG.schedule_interval" 属性也没了。
+- 上下文变量里大量移除，模板/
+"{{ }}" 里用到会直接坏：
+   - 
+"execution_date" → 用 
+"dag_run.logical_date"
+   - 
+"prev_ds / next_ds / yesterday_ds / tomorrow_ds / prev_execution_date / next_execution_date / prev_execution_date_success" 等全部移除
+- 
+"logical_date" 语义变了：2.x 里约等于 
+"data_interval_start"，3.x 里约等于 run-after（排队/触发时间点）；另外现在允许 
+"logical_date=None"（用于推理、事件驱动、ML 流水线）。
+- 裸 cron 字符串默认从 
+"CronDataIntervalTimetable" 变成 
+"CronTriggerTimetable"，如果你依赖“data interval 左闭右开”的老行为，要开 
+"[scheduler].create_cron_data_intervals=True"。
+- 
+"catchup_by_default" 默认改成 False。
+- 
+"allow_illegal_arguments" 类容忍没了：Operator 传错参（比如拼错 kwarg）2.x 默默忽略，3.x 直接 import 失败。
 
-1）Skill 封装"怎么修 Config Two / 编译错误"
+被彻底移除的功能 / 替代物
 
-".kiro/skills/jenkins-self-heal/SKILL.md"：
+- SubDagOperator / SubDAG → TaskGroup
+- SLA / sla_callbacks → 后续用 Deadline Alerts（3.2+ 开始有）
+- SequentialExecutor / DebugExecutor → 本地开发用 LocalExecutor；DebugExecutor 在 3.x 早期也被移走/重构
+- CeleryKubernetesExecutor、LocalKubernetesExecutor → 多 Executor 配置（Multiple Executor Config）
+- DAG pickling、XCom pickling（默认后端不再允许 pickle；老 XCom 进归档表，要传复杂对象得自定义 XCom backend）
+- Experimental API 没了，全走 REST API
+- CLI 的 
+"--subdir / -S" 被 DAG Bundles 概念替代
 
----
-name: jenkins-self-heal
-description: >-
-  When a Jenkins pipeline fails, fetch the failing log, classify the error
-  (compile / test / config-two schema / timeout), patch the repo accordingly,
-  and re-trigger the pipeline. Activates when user says "rerun CI", "fix build",
-  or after a PostTaskExec hook reports Jenkins FAILURE.
----
-## Steps
-1. curl Jenkins API for lastBuild result + logText
-2. Classify: grep for `BUILD FAILURE`, `ConfigTwoException`, `npm ERR`, `Timeout`
-3. Apply known fix from references/fix-patterns.md
-4. Edit file, git commit -m "ci: auto-fix <class>"
-5. Trigger rebuild via `curl -X POST .../build`
-6. Poll up to 10 min; if still red, loop max 3 times then stop and report
+Provider / import 拆分（也是大坑）
 
-把"哪类错改哪个文件"写进 
-"references/fix-patterns.md"，这就是你从 agent.md 转过来的核心知识。
+原来在 
+"airflow-core" 里的常用算子被拆到独立包 apache-airflow-providers-standard：
 
-2）Hook 做"任务结束自动查 CI"
+- 
+"BashOperator"、
+"PythonOperator"、
+"EmailOperator"、
+"SimpleHttpOperator"、
+"ShortCircuitOperator"、
+"DummyOperator→EmptyOperator" 等都挪出去了
+- 旧 import 路径 
+"airflow.operators.* / airflow.sensors.* / airflow.hooks.* / airflow.macros.*" 在 3.0 起陆续移除，长期稳定写法是：
+   - 通用 DAG 构件：
+"from airflow.sdk import DAG, @task, TaskGroup, Asset, Connection, Variable"
+   - 标准算子：
+"from airflow.providers.standard.operators.python import PythonOperator"
 
-".kiro/hooks/ci-watch.json"：
+部署 / API / 配置侧
 
-{
-  "version": "v1",
-  "hooks": [{
-    "name": "jenkins-after-task",
-    "trigger": "PostTaskExec",
-    "action": {
-      "type": "command",
-      "command": "bash .kiro/scripts/jenkins_check.sh"
-    },
-    "timeout": 600,
-    "enabled": true
-  }]
-}
+- REST API：
+"/api/v1" → FastAPI 的 
+"/api/v2"，校验更严格（422 代替 400），
+"execution_date" 参数换成 
+"logical_date"；POST 触发 DAG run 不传 
+"logical_date" 时默认 
+"None"。
+- CLI 拆分：
+"airflow" 管本地，
+"airflowctl" 管远程/服务化部署（AIP-81）。
+- 
+"airflow db init / db upgrade" 合并成 
+"airflow db migrate"。
+- UI 从 Flask-AppBuilder 换成 React + FastAPI；FAB 不再是默认 auth manager，老 
+"webserver_config.py" 里的 
+"AirflowSecurityManager" 要改成 
+"FabAirflowSecurityManagerOverride"（装 
+"apache-airflow-providers-fab"）。
+- 老 
+"appbuilder_views / appbuilder_menu_items / flask_blueprints" 插件要迁 FastAPI，或靠 FAB provider 的兼容层兜底。
 
-"jenkins_check.sh" 里干这些事：
-
-- 调 Jenkins API 拿最近一次 build 状态
-- 如果 SUCCESS → exit 0，什么都不发生
-- 如果 FAILURE → 把 log 落到 
-".kiro/ci-last.log"，exit 0 但 stdout 打印 
-""Jenkins FAILURE, log at .kiro/ci-last.log, invoke /jenkins-self-heal""（Kiro 会把 stdout 加进上下文，主 agent 看到后主动调 skill）
-- 超时轮询写在脚本里（
-"for i in {1..20}; sleep 30"），脚本级超时由 hook 的 
-"timeout: 600" 兜住
-
-为什么不让 hook 直接调 agent 修代码？因为 
-"type: agent" 的 hook 只是注入 prompt，不保证主 agent 真的进入"改完再跑"的循环；让主 agent 在拿到 stdout 后自己走 skill 的 loop 更可控。
-3）主 agent / Autopilot 持有 retry 循环
-
-你在 Kiro 里开 Autopilot 或给 spec task 下指令：
-
-"实现这个 task，每次 PostTaskExec 后如果 Jenkins 红，按 jenkins-self-heal 修，最多 3 轮，还红就停。"
-Kiro 的 agent loop 会：
-
-- 写代码 → 提交 → hook 触发 
-"jenkins_check.sh" → 发现红 → stdout 提示
-- 下一轮 agent 读到提示 → 调 
-"jenkins-self-heal" skill → 改代码 → 再提交
-- 直到绿或到 3 轮上限
-
-这就是你要的"超时重试 + 看 log 迭代"，循环由 agent 对话轮次提供，超时由 shell+hook timeout 提供，修代码由 skill 提供。
-
-几种可行度对比
-
-方案 做法 自治程度 评价
-纯 Hook 
-"type:agent" 失败后塞 prompt 让 agent 修 中 简单但循环弱，agent 可能一轮就停
-Hook+Shell 轮询+主 agent skill 上述三层 高 推荐，最接近你说的自愈 loop
-把重试全写进 Jenkinsfile 
-"retry(3)+timeout" 在 Jenkins 侧 低（只重试构建，不改代码） 适合 flaky 测试，不适合"改代码" 
-外部 cron/python 跑 CI 自愈调 Kiro CLI 完全脱离 hook 高 重，但适合服务端无人值守
-
-两个容易踩的坑
-
-- Hook 无限递归：
-"PostFileSave" 触发 agent 改文件 → 又存盘 → 再触发。Kiro 对同 hook 嵌套会跳过，但跨 hook 链（save→agent→save）可能转。建议 CI 检查挂 
-"PostTaskExec" 而不是 
-"PostFileSave"，或用 matcher 排除 CI 脚本自身。
-- 超时单位：hook 的 
-"timeout" 是秒，默认 60；你等 Jenkins 10 分钟要写 
-"600"，脚本内部再自己 sleep 轮询，别指望 Kiro 自动退避。
-
-一句话定性
-
-Kiro 没有"内置 Jenkins 自愈 agent loop"按钮，但它给齐了积木：agent 主循环（Autopilot/Spec）+ Hook（事件/超时）+ Shell（轮询 Jenkins API）+ Skill（修代码知识）+ MCP（可选接 Jenkins）。你前面那个 IDEA 里"Config Two 保存时改键名"的需求，升级成"CI 红了自动修 Config Two 再跑"——就是把这个 Skill 从文件事件挂到 
-"PostTaskExec" + 
-"jenkins-self-heal" 上就行。
-
-如果你愿意，我可以帮你把上面那个 
-"jenkins_check.sh" 和 
-"jenkins-self-heal/SKILL.md" 按"Config Two yaml 校验失败"这一具体场景填实，你直接丢进 
-".kiro/" 就能跑。
+如果你愿意，我可以按你现在的代码形态（比如“主要是 Bash/Python DAG + 自研 Operator + 调 REST API / 用 XCom 传对象”）帮你筛出一张只针对你项目的 2→3 迁移 checklist。
