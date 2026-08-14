@@ -15,4 +15,11 @@ WHERE
   )
   AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
 GROUP BY node_name
-ORDER BY vm_started_at DESC
+ORDER BY vm_started_at DES
+
+resource.type="k8s_node"
+resource.labels.cluster_name="YOUR_CLUSTER_NAME"
+logName="projects/YOUR_PROJECT_ID/logs/events"
+jsonPayload.reason=("NodeReady" OR "NodeNotReady" OR "NodeStatusUnknown" OR "RemovingNode")
+
+
