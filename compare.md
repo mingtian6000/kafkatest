@@ -1,35 +1,18 @@
 ```
-python3.12 -m airflow connections add git_github \
-  --conn-type git \
-  --conn-host https://github.com/your-org/your-dags-repo.git \
-  --conn-password $GITHUB_PAT
-
-
-export AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST='[
-  {
-    "name": "github-dags",
-    "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
-    "kwargs": {
-      "git_conn_id": "git_github",
-      "tracking_ref": "main",
-      "subdir": "dags",
-      "refresh_interval": 60
-    }
-  }
-]'
-
-[dag_processor]
-dag_bundle_config_list = [
-    {
-        "name": "github-dags",
-        "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
-        "kwargs": {
-            "git_conn_id": "git_github",
-            "tracking_ref": "main",
-            "subdir": "dags",
-            "refresh_interval": 60
-        }
-    }
-]
-[core]
-auth_manager = airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+SELECT
+  resource.labels.instance_name AS node_name,
+  MIN(IF(protoPayload.methodName = 'compute.instances.start', timestamp, NULL)) AS vm_started_at,
+  MAX(IF(protoPayload.methodName IN ('compute.instances.delete','compute.instances.preempted'), timestamp, NULL)) AS vm_stopped_at,
+  ARRAY_AGG(DISTINCT protoPayload.methodName) AS actions
+FROM `projects/YOUR_PROJECT_ID/logs/cloudaudit_googleapis_com_system_event`
+WHERE
+  resource.type = 'gce_instance'
+  AND resource.labels.project_id = 'YOUR_PROJECT_ID'
+  AND protoPayload.methodName IN (
+    'compute.instances.start',
+    'compute.instances.delete',
+    'compute.instances.preempted'
+  )
+  AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
+GROUP BY node_name
+ORDER BY vm_started_at DESC
