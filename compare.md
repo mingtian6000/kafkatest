@@ -1,25 +1,11 @@
-```
-SELECT
-  resource.labels.instance_name AS node_name,
-  MIN(IF(protoPayload.methodName = 'compute.instances.start', timestamp, NULL)) AS vm_started_at,
-  MAX(IF(protoPayload.methodName IN ('compute.instances.delete','compute.instances.preempted'), timestamp, NULL)) AS vm_stopped_at,
-  ARRAY_AGG(DISTINCT protoPayload.methodName) AS actions
-FROM `projects/YOUR_PROJECT_ID/logs/cloudaudit_googleapis_com_system_event`
-WHERE
-  resource.type = 'gce_instance'
-  AND resource.labels.project_id = 'YOUR_PROJECT_ID'
-  AND protoPayload.methodName IN (
-    'compute.instances.start',
-    'compute.instances.delete',
-    'compute.instances.preempted'
-  )
-  AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 14 DAY)
-GROUP BY node_name
-ORDER BY vm_started_at DES
+´´´
+# 在好 VM 上
+python3 -m pip install --upgrade pip wheel
 
-resource.type="k8s_node"
-resource.labels.cluster_name="YOUR_CLUSTER_NAME"
-logName="projects/YOUR_PROJECT_ID/logs/events"
-jsonPayload.reason=("NodeReady" OR "NodeNotReady" OR "NodeStatusUnknown" OR "RemovingNode")
+# 1. 先锁版（你已经有了 requirements-lock.txt 也行）
+python3 -m pip freeze > /tmp/req-lock.txt
 
-
+# 2. 用 --no-deps 按已安装版本逐个重新 wheel 出来
+#    这样 pip 不再去网上重新解析依赖图，只验证「我本地这个版本能不能打成 wheel」
+mkdir -p /tmp/wh
+python3 -m pip wheel --no-deps -r /tmp/req-lock.txt --wheel-dir=/tmp/wh
