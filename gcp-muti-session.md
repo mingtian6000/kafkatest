@@ -1,69 +1,16 @@
 ```
-# ============================================================
-# 基础镜像（需要你确认一下，图里没显示 FROM，看 history 最底层）
-# 常见组合：node:18-alpine / node:20-alpine / node:18-slim
-# ============================================================
-FROM node:18-alpine AS runtime
+You are an expert cloud infrastructure architect. I will paste a JSON output of my GCP resources (from `gcloud asset list`, `terraform show -json`, or similar). 
 
-# ============================================================
-# 第 1-2 层：环境变量
-# ============================================================
-ENV NODE_ENV=production
-ENV PORT=8080
+Please analyze the JSON and:
 
-# ============================================================
-# 第 3 层：USER 0（先切到 root，方便装依赖/建目录）
-# ============================================================
-USER 0
+1. Extract all GCP components (VPC, Subnets, Firewall, GKE clusters, Node Pools, MIGs, VMs, Cloud SQL, DNS zones, Secret Manager, Load Balancers, Cloud Storage buckets, IAM Service Accounts, etc.).
+2. Infer relationships between components (e.g., which VMs/MIGs belong to which VPC, which GKE pods connect to which Cloud SQL, which firewall rules apply to which targets).
+3. Generate a Mermaid `graph TD` diagram:
+   - Group resources into subgraphs (e.g., `subgraph VPC`, `subgraph GKE Cluster`, `subgraph Database Layer`).
+   - Draw arrows to show traffic/connection flow (e.g., `GKE_Pod -->|5432| Cloud_SQL`).
+   - Use different shapes for different resource types (e.g., `[Rectangle]` for compute, `((Circle))` for databases, `{Diamond}` for firewalls).
+4. Identify any resources that appear to be ORPHANED or STANDALONE (no dependencies, no connections to other resources) and mark them with a red dashed border or a "⚠️ Standalone" note.
+5. If the JSON is too large to process at once, tell me which sections to extract and re-paste.
 
-# ============================================================
-# 第 4 层：工作目录
-# ============================================================
-WORKDIR /app
-
-# ============================================================
-# 第 5 层：先拷 package.json / package-lock.json
-# （利用 Docker 缓存，依赖不变就不重装）
-# ============================================================
-COPY package*.json ./
-
-# ============================================================
-# 第 6 层：装依赖（生产模式，不装 devDependencies）
-# ============================================================
-RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
-
-# ============================================================
-# 第 7-8 层：拷源码
-#   - server.js        （Node 入口）
-#   - public/          （前端静态资源）
-#   - data/            （数据文件）
-# ============================================================
-COPY server.js ./
-COPY public ./public
-COPY data ./data
-
-# ============================================================
-# 第 9 层：切到非 root 用户（1001 是常见 node 用户）
-# ============================================================
-USER 1001
-
-# ============================================================
-# 第 10 层：暴露端口
-# ============================================================
-EXPOSE 8080/tcp
-
-# ============================================================
-# 第 11 层：健康检查
-# （图里写的是 HEALTHCHECK 检查本地端口）
-# ============================================================
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
-# 注：如果是 alpine 镜像，wget 可能要换成：
-#   CMD wget -qO- http://localhost:8080/health || exit 1
-# 或（用 node 自带的）：
-#   CMD node -e "require('http').get('http://localhost:8080/health',r=>process.exit(r.statusCode===200?0:1))" || exit 1
-
-# ============================================================
-# 第 12 层：启动命令
-# ============================================================
-CMD ["node", "server.js"]
+Here is my GCP resource JSON:
+[paste your JSON here]
