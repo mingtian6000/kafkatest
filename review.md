@@ -1,2 +1,2 @@
 ```
-While many of our KPIs are reasonable, an excessively high volume of targets could lead to unintended negative outcomes. For example, teams may resort to artificially inflating code metrics, or we risk eroding trust within the team.
+A lot of these KPIs make sense, but if we set too many of them, it can backfire. We might end up seeing people gaming the code metrics, and we could also lose the team’s trust.
