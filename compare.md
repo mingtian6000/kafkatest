@@ -1,4 +1,2 @@
 ```
-
-Subject:
-Responsibilities include software development, coding contribution, and building automation solutions for our platform. As a contractor, the individual has delivered significant value: writing clean, maintainable code, designing and implementing automation pipelines that reduced manual work, and actively supporting cross‑team requests. They have consistently exceeded expectations with very strong performance ratings. Given the ongoing, long‑term nature of this work and to retain this high‑performing resource, we strongly justify converting this role from contractor to permanent headcount.
+This colleague is highly creative and consistently brings fresh ideas to the team. He has a strong appetite for innovation and frequently builds surprising, well‑thought‑out PoCs to validate new approaches. Many of his proofs‑of‑concepts have unlocked better ways of working, brought tangible value, and made a meaningful contribution to our roadmap.
