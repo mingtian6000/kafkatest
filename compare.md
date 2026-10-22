@@ -89,4 +89,105 @@
         <div class="node-card" onclick="showDetail('cloud', 'tf')">
           <span class="node-icon">📝</span>
           <div class="node-text"><h4>TF Validation</h4><p>Policy check plan</p></div>
-        </
+        </div>
+        <div class="node-card" onclick="showDetail('cloud', 'patch')">
+          <span class="node-icon">🩹</span>
+          <div class="node-text"><h4>Auto Patching</h4><p>CVE fix workflow</p></div>
+        </div>
+        <div class="node-card" onclick="showDetail('cloud', 'heal')">
+          <span class="node-icon">⚙️</span>
+          <div class="node-text"><h4>Self-Healing</h4><p>Restart unhealthy</p></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Pillar 3 -->
+    <div class="pillar-col">
+      <div class="pillar-title">Cloud Cost Control</div>
+      <div class="node-list">
+        <div class="node-card" onclick="showDetail('cost', 'anomaly')">
+          <span class="node-icon">📈</span>
+          <div class="node-text"><h4>Anomaly Detect</h4><p>ML spend alert</p></div>
+        </div>
+        <div class="node-card" onclick="showDetail('cost', 'idle')">
+          <span class="node-icon">⏸️</span>
+          <div class="node-text"><h4>Idle Auto-Stop</h4><p>Off-hour shutdown</p></div>
+        </div>
+        <div class="node-card" onclick="showDetail('cost', 'rightsize')">
+          <span class="node-icon">📏</span>
+          <div class="node-text"><h4>Right-Sizing</h4><p>Optimize specs</p></div>
+        </div>
+        <div class="node-card" onclick="showDetail('cost', 'showback')">
+          <span class="node-icon">🏷️</span>
+          <div class="node-text"><h4>Showback</h4><p>Team chargeback</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer-summary">
+    Goal: Achieve <b>Zero-Touch Ops</b> | Reduce Toil by <b>40%</b> | Save Cloud Cost by <b>25%</b>
+  </div>
+  
+  <!-- 交互弹窗 Sub-page -->
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <h2 id="dTitle">Details</h2>
+      <button class="close-btn" onclick="closeDetail()">Close ✕</button>
+    </div>
+    <div class="detail-content" id="dContent">
+      <!-- 动态注入内容 -->
+    </div>
+    <div class="benefit-tag" id="dBenefit">Business Benefit</div>
+  </div>
+</div>
+
+<script>
+const dbData = {
+  migration: { title: "Schema Migration CI", steps: ["Commit SQL", "Auto Test", "Deploy to Prod"], metrics: [["95%", "faster"], ["0", "manual"]] },
+  drift: { title: "Data Drift Detection", steps: ["Scan schema", "Compare base", "Alert"], metrics: [["100%", "coverage"], ["5m", "alert"]] },
+  backup: { title: "Auto Backup & Recovery", steps: ["Daily dump", "Encrypt", "Verify"], metrics: [["99.9%", "SLA"], ["10m", "restore"]] },
+  sync: { title: "Cross-Env Sync", steps: ["Mask data", "Export", "Import"], metrics: [["Daily", "sync"], ["Zero", "PII leak"]] }
+};
+const cloudData = {
+  compliance: { title: "Compliance Auto-Fix", steps: ["Detect", "Run playbook", "Verify"], metrics: [["75%", "less manual"], ["24/7", "monitor"]] },
+  tf: { title: "TF Validation", steps: ["Hook CI", "Policy check", "Pass/Fail"], metrics: [["80%", "risks blocked"], ["3m", "scan"]] },
+  patch: { title: "Auto Patching", steps: ["Scan CVE", "Build image", "Rollout"], metrics: [["90%", "CVEs fixed"], ["Zero", "downtime"]] },
+  heal: { title: "Self-Healing", steps: ["Health check", "Restart", "Notify"], metrics: [["30%", "less pages"], ["99.9%", "uptime"]] }
+};
+const costData = {
+  anomaly: { title: "Cost Anomaly Detection", steps: ["Collect", "ML check", "Alert"], metrics: [["90%", "detected"], ["15m", "alert"]] },
+  idle: { title: "Idle Auto-Stop", steps: ["Tag", "Stop 7PM", "Start 9AM"], metrics: [["35%", "cost drop"], ["Zero", "impact"]] },
+  rightsize: { title: "Right-Sizing", steps: ["Check load", "Suggest", "Resize"], metrics: [["20%", "saved"], ["P95", "steady"]] },
+  showback: { title: "Tagging & Showback", steps: ["Define tags", "Enforce", "Report"], metrics: [["100%", "allocated"], ["1h", "gen"]] }
+};
+
+function showDetail(category, key) {
+  let data;
+  if(category === 'db') data = dbData[key];
+  if(category === 'cloud') data = cloudData[key];
+  if(category === 'cost') data = costData[key];
+  
+  if(!data) return;
+  
+  document.getElementById('dTitle').innerText = data.title;
+  document.getElementById('dContent').innerHTML = `
+    <div class="detail-box">
+      <h3>Workflow</h3>
+      <ul>${data.steps.map(s => `<li>${s}</li>`).join('')}</ul>
+    </div>
+    <div class="detail-box">
+      <h3>Key Metrics</h3>
+      <ul>${data.metrics.map(m => `<li><b>${m[0]}</b> ${m[1]}</li>`).join('')}</ul>
+    </div>
+  `;
+  document.getElementById('dBenefit').innerText = "Business Benefit: Improves efficiency, security, and reduces operational costs.";
+  document.getElementById('detailPanel').classList.add('active');
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('active');
+}
+</script>
+</body>
+</html>
